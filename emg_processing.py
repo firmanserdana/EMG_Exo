@@ -2,386 +2,683 @@
 # -*- coding: utf-8 -*-
 
 """
-EMG Signal Processing Module
-Handles preprocessing and motor unit decomposition of EMG signals.
+EMG Processing
+Handles signal processing and feature extraction for EMG signals.
 """
 
 import numpy as np
-from scipy import signal
-import scipy.io as sio
-import time
-from sklearn.decomposition import FastICA, PCA
+import scipy.signal as signal
+from scipy.fft import fft, fftfreq
 import matplotlib.pyplot as plt
-from mne.decoding import UnsupervisedSpatialFilter
+from multiprocessing import Process, Queue
+import time
 import logging
-import h5py
-import os
-from datetime import datetime
 
-from ini import EMG_PROCESSING, RECORDING, logger
+from ini import EMG_PROCESSING, logger
+
 
 class EMGProcessor:
-    """Class for processing EMG signals and performing motor unit decomposition."""
+    """Process EMG signals for feature extraction and analysis."""
     
-    def __init__(self):
-        """Initialize the EMG processor."""
-        self.window_size = EMG_PROCESSING["window_size"]
-        self.window_overlap = EMG_PROCESSING["window_overlap"]
-        self.bp_low = EMG_PROCESSING["bandpass_low"]
-        self.bp_high = EMG_PROCESSING["bandpass_high"]
+    def __init__(self, channel_count=8, sampling_rate=2000):
+        """Initialize EMG processor.
+        
+        Args:
+            channel_count (int): Number of EMG channels
+            sampling_rate (int): Sampling rate in Hz
+        """
+        # Configuration
+        self.channel_count = channel_count
+        self.sampling_rate = sampling_rate
+        
+        # Signal buffers for each channel
+        self.buffer_size = int(EMG_PROCESSING["buffer_time"] * sampling_rate)
+        self.raw_buffers = [[] for _ in range(channel_count)]
+        self.processed_buffers = [[] for _ in range(channel_count)]
+        
+        # Processing settings from config
+        self.hp_cutoff = EMG_PROCESSING["highpass_cutoff"]
+        self.lp_cutoff = EMG_PROCESSING["lowpass_cutoff"]
         self.notch_freq = EMG_PROCESSING["notch_freq"]
-        self.decomp_method = EMG_PROCESSING["decomposition_method"]
-        self.save_dir = RECORDING["save_dir"]
+        self.notch_quality = EMG_PROCESSING["notch_quality"]
         
-        # Buffer to store raw data
-        self.raw_buffer = None
+        # Prepare filters
+        self._prepare_filters()
         
-        # Components from decomposition
-        self.components = None
-        self.mixing_matrix = None
+        # Feature extraction settings
+        self.feature_window = int(EMG_PROCESSING["feature_window"] * sampling_rate)
+        self.feature_overlap = EMG_PROCESSING["feature_overlap"]
+        self.features_enabled = EMG_PROCESSING["features_enabled"]
         
-        # Motor unit spike trains
-        self.spike_trains = []
+        logger.info(f"EMG Processor initialized with {channel_count} channels at {sampling_rate} Hz")
+        logger.info(f"Buffer size: {self.buffer_size} samples ({EMG_PROCESSING['buffer_time']} seconds)")
+        logger.info(f"Feature window: {self.feature_window} samples ({EMG_PROCESSING['feature_window']} seconds)")
+    
+    def _prepare_filters(self):
+        """Prepare filter coefficients."""
+        nyquist = 0.5 * self.sampling_rate
         
-        logger.info("EMG processor initialized")
+        # High-pass filter
+        self.hp_b, self.hp_a = signal.butter(
+            2, self.hp_cutoff / nyquist, btype='high', analog=False
+        )
         
-    def preprocess(self, emg_data):
-        """Preprocess raw EMG data.
+        # Low-pass filter
+        self.lp_b, self.lp_a = signal.butter(
+            4, self.lp_cutoff / nyquist, btype='low', analog=False
+        )
         
-        Args:
-            emg_data (numpy.ndarray): Raw EMG data with shape (channels, samples)
-            
-        Returns:
-            numpy.ndarray: Preprocessed EMG data
-        """
-        if emg_data is None or emg_data.size == 0:
-            logger.warning("Empty data received for preprocessing")
-            return None
+        # Notch filter (for power line noise)
+        self.notch_b, self.notch_a = signal.iirnotch(
+            self.notch_freq, self.notch_quality, self.sampling_rate
+        )
         
-        channels, samples = emg_data.shape
-        logger.debug(f"Preprocessing data with shape {emg_data.shape}")
-        
-        # Apply filters
-        processed_data = np.zeros_like(emg_data)
-        
-        for ch in range(channels):
-            # Bandpass filter
-            b, a = signal.butter(4, [self.bp_low, self.bp_high], 
-                                btype='bandpass', fs=2048)
-            processed_data[ch, :] = signal.filtfilt(b, a, emg_data[ch, :])
-            
-            # Notch filter for power line interference
-            b_notch, a_notch = signal.iirnotch(self.notch_freq, 30, 2048)
-            processed_data[ch, :] = signal.filtfilt(b_notch, a_notch, 
-                                                   processed_data[ch, :])
-        
-        # Add to buffer for continuous processing
-        if self.raw_buffer is None:
-            self.raw_buffer = processed_data
-        else:
-            self.raw_buffer = np.hstack((self.raw_buffer, processed_data))
-            
-        # Trim buffer if it gets too large
-        buffer_max = 10 * self.window_size  # Keep at most 10 windows
-        if self.raw_buffer.shape[1] > buffer_max:
-            self.raw_buffer = self.raw_buffer[:, -buffer_max:]
-        
-        return processed_data
-        
-    def extract_features(self, processed_data):
-        """Extract features from preprocessed EMG data.
+        # Filter states for continuous filtering
+        self.hp_zi = [signal.lfilter_zi(self.hp_b, self.hp_a) for _ in range(self.channel_count)]
+        self.lp_zi = [signal.lfilter_zi(self.lp_b, self.lp_a) for _ in range(self.channel_count)]
+        self.notch_zi = [signal.lfilter_zi(self.notch_b, self.notch_a) for _ in range(self.channel_count)]
+    
+    def add_samples(self, samples):
+        """Add EMG samples to the processing buffer.
         
         Args:
-            processed_data (numpy.ndarray): Preprocessed EMG data
+            samples: 2D array or list of lists, shape (n_samples, n_channels)
+                EMG samples to process
+                
+        Returns:
+            list: Processed samples for each channel
+        """
+        samples = np.asarray(samples)
+        
+        # Check if samples are in the right format
+        if len(samples.shape) == 1 and self.channel_count == 1:
+            # Single channel input as 1D array
+            samples = samples.reshape(-1, 1)
+        elif len(samples.shape) == 1:
+            # Single sample for multiple channels
+            samples = samples.reshape(1, -1)
+        
+        # Sanity check
+        if samples.shape[1] != self.channel_count:
+            logger.warning(f"Sample channel count mismatch: got {samples.shape[1]}, expected {self.channel_count}")
+            # Try to adapt
+            if samples.shape[1] > self.channel_count:
+                samples = samples[:, :self.channel_count]
+            else:
+                # Pad with zeros
+                padding = np.zeros((samples.shape[0], self.channel_count - samples.shape[1]))
+                samples = np.hstack((samples, padding))
+        
+        # Process each channel
+        processed_samples = []
+        
+        for ch in range(self.channel_count):
+            # Get samples for this channel
+            ch_samples = samples[:, ch]
+            
+            # Add to raw buffer and maintain buffer size
+            self.raw_buffers[ch].extend(ch_samples)
+            if len(self.raw_buffers[ch]) > self.buffer_size:
+                self.raw_buffers[ch] = self.raw_buffers[ch][-self.buffer_size:]
+            
+            # Filter the new samples
+            filtered_samples = self._filter_samples(ch_samples, ch)
+            
+            # Add to processed buffer and maintain buffer size
+            self.processed_buffers[ch].extend(filtered_samples)
+            if len(self.processed_buffers[ch]) > self.buffer_size:
+                self.processed_buffers[ch] = self.processed_buffers[ch][-self.buffer_size:]
+            
+            processed_samples.append(filtered_samples)
+        
+        return processed_samples
+    
+    def _filter_samples(self, samples, channel):
+        """Apply filters to the samples for a specific channel.
+        
+        Args:
+            samples: 1D array, EMG samples for one channel
+            channel (int): Channel index
             
         Returns:
-            dict: Dictionary of extracted features
+            list: Filtered samples
         """
-        if processed_data is None or processed_data.size == 0:
-            return {}
+        samples = np.asarray(samples)
         
-        channels, samples = processed_data.shape
+        # Apply high-pass filter with state
+        samples, self.hp_zi[channel] = signal.lfilter(
+            self.hp_b, self.hp_a, samples, zi=self.hp_zi[channel] * samples[0]
+        )
+        
+        # Apply notch filter with state
+        samples, self.notch_zi[channel] = signal.lfilter(
+            self.notch_b, self.notch_a, samples, zi=self.notch_zi[channel] * samples[0]
+        )
+        
+        # Apply low-pass filter with state
+        samples, self.lp_zi[channel] = signal.lfilter(
+            self.lp_b, self.lp_a, samples, zi=self.lp_zi[channel] * samples[0]
+        )
+        
+        return samples.tolist()
+    
+    def extract_features(self, window=None):
+        """Extract features from the processed EMG data.
+        
+        Args:
+            window (tuple): Optional (start, end) tuple to specify window in samples
+                If None, uses the entire buffer
+                
+        Returns:
+            dict: Dictionary of features with keys:
+                - 'rms': Root Mean Square value for each channel
+                - 'mav': Mean Absolute Value for each channel
+                - 'zc': Zero Crossing rate for each channel
+                - 'ssc': Slope Sign Changes for each channel
+                - 'wl': Waveform Length for each channel
+                - 'var': Variance for each channel
+                - 'freq_mean': Mean frequency for each channel
+                - 'freq_median': Median frequency for each channel
+                - 'freq_power': Total power for each channel
+        """
         features = {}
         
-        # Root Mean Square (RMS)
-        features['rms'] = np.sqrt(np.mean(processed_data**2, axis=1))
+        # Use default window if not specified
+        if window is None:
+            window = (0, len(self.processed_buffers[0]))
         
-        # Mean Absolute Value (MAV)
-        features['mav'] = np.mean(np.abs(processed_data), axis=1)
-        
-        # Waveform Length (WL)
-        features['wl'] = np.sum(np.abs(np.diff(processed_data, axis=1)), axis=1)
-        
-        # Zero Crossings (ZC)
-        zero_crossings = np.zeros(channels)
-        for ch in range(channels):
-            # Count zero crossings with threshold to avoid noise
-            threshold = 0.01 * np.std(processed_data[ch, :])
-            zero_crossings[ch] = np.sum(
-                np.diff(np.signbit(processed_data[ch, :])) & 
-                (np.abs(np.diff(processed_data[ch, :])) > threshold)
-            )
-        features['zc'] = zero_crossings
-        
-        # Slope Sign Changes (SSC)
-        ssc = np.zeros(channels)
-        for ch in range(channels):
-            threshold = 0.01 * np.std(processed_data[ch, :])
-            diff_data = np.diff(processed_data[ch, :])
-            ssc[ch] = np.sum(
-                ((diff_data[:-1] * diff_data[1:]) < 0) & 
-                ((np.abs(diff_data[:-1]) > threshold) | 
-                 (np.abs(diff_data[1:]) > threshold))
-            )
-        features['ssc'] = ssc
-        
-        # Auto-Regressive (AR) coefficients
-        ar_order = 4
-        ar_coeffs = np.zeros((channels, ar_order))
-        for ch in range(channels):
-            try:
-                ar_coeffs[ch, :], _ = signal.lpc(processed_data[ch, :], ar_order)
-            except:
-                ar_coeffs[ch, :] = np.zeros(ar_order)
-        features['ar'] = ar_coeffs
+        for ch in range(self.channel_count):
+            # Get data for this channel within window
+            data = np.array(self.processed_buffers[ch][window[0]:window[1]])
+            
+            if len(data) == 0:
+                continue  # Skip if no data
+            
+            # Time domain features
+            if 'rms' in self.features_enabled:
+                if 'rms' not in features:
+                    features['rms'] = []
+                features['rms'].append(np.sqrt(np.mean(data**2)))
+            
+            if 'mav' in self.features_enabled:
+                if 'mav' not in features:
+                    features['mav'] = []
+                features['mav'].append(np.mean(np.abs(data)))
+            
+            if 'zc' in self.features_enabled:
+                if 'zc' not in features:
+                    features['zc'] = []
+                # Zero crossings with threshold
+                threshold = 0.01 * np.std(data)
+                zero_crossings = np.sum(np.diff(np.signbit(data)) & (np.abs(np.diff(data)) > threshold))
+                features['zc'].append(zero_crossings)
+            
+            if 'ssc' in self.features_enabled:
+                if 'ssc' not in features:
+                    features['ssc'] = []
+                # Slope sign changes with threshold
+                threshold = 0.01 * np.std(data)
+                ssc = 0
+                for i in range(1, len(data) - 1):
+                    if ((data[i] > data[i-1] and data[i] > data[i+1]) or 
+                        (data[i] < data[i-1] and data[i] < data[i+1])):
+                        if (abs(data[i] - data[i-1]) > threshold or 
+                            abs(data[i] - data[i+1]) > threshold):
+                            ssc += 1
+                features['ssc'].append(ssc)
+            
+            if 'wl' in self.features_enabled:
+                if 'wl' not in features:
+                    features['wl'] = []
+                # Waveform length (sum of absolute changes)
+                features['wl'].append(np.sum(np.abs(np.diff(data))))
+            
+            if 'var' in self.features_enabled:
+                if 'var' not in features:
+                    features['var'] = []
+                features['var'].append(np.var(data))
+            
+            # Frequency domain features
+            if any(f in self.features_enabled for f in ['freq_mean', 'freq_median', 'freq_power']):
+                # Compute FFT
+                # Apply window to reduce spectral leakage
+                windowed_data = data * np.hanning(len(data))
+                fft_values = fft(windowed_data)
+                fft_magnitude = np.abs(fft_values[:len(data)//2])
+                frequencies = fftfreq(len(data), 1/self.sampling_rate)[:len(data)//2]
+                
+                # Only consider frequencies in EMG range (typically 5-500 Hz)
+                mask = (frequencies >= 5) & (frequencies <= 500)
+                fft_magnitude = fft_magnitude[mask]
+                frequencies = frequencies[mask]
+                
+                if len(frequencies) > 0:
+                    if 'freq_mean' in self.features_enabled:
+                        if 'freq_mean' not in features:
+                            features['freq_mean'] = []
+                        # Mean frequency
+                        features['freq_mean'].append(np.average(frequencies, weights=fft_magnitude))
+                    
+                    if 'freq_median' in self.features_enabled:
+                        if 'freq_median' not in features:
+                            features['freq_median'] = []
+                        # Median frequency
+                        cum_sum = np.cumsum(fft_magnitude)
+                        half_power = cum_sum[-1] / 2.0
+                        median_idx = np.argmin(np.abs(cum_sum - half_power))
+                        features['freq_median'].append(frequencies[median_idx])
+                    
+                    if 'freq_power' in self.features_enabled:
+                        if 'freq_power' not in features:
+                            features['freq_power'] = []
+                        # Total power
+                        features['freq_power'].append(np.sum(fft_magnitude**2))
         
         return features
-        
-    def decompose_motor_units(self, preprocessed_data, n_components=None):
-        """Decompose EMG signals into motor unit action potentials.
-        
-        Args:
-            preprocessed_data (numpy.ndarray): Preprocessed EMG data
-            n_components (int): Number of components (motor units) to extract
-            
-        Returns:
-            tuple: (components, mixing_matrix, spike_trains)
-        """
-        if preprocessed_data is None or preprocessed_data.size == 0:
-            logger.warning("Empty data received for decomposition")
-            return None, None, None
-        
-        channels, samples = preprocessed_data.shape
-        
-        # Default to channels/2 components if not specified
-        if n_components is None:
-            n_components = min(channels // 2, 20)  # Max 20 motor units by default
-            
-        logger.info(f"Decomposing {channels} channels into {n_components} motor units")
-        
-        try:
-            # Choose decomposition method
-            if self.decomp_method == "FastICA":
-                # FastICA for blind source separation
-                ica = FastICA(n_components=n_components, random_state=42)
-                components = ica.fit_transform(preprocessed_data.T)
-                mixing_matrix = ica.mixing_
-                
-            elif self.decomp_method == "PCA":
-                # PCA for dimensionality reduction
-                pca = PCA(n_components=n_components)
-                components = pca.fit_transform(preprocessed_data.T)
-                mixing_matrix = pca.components_
-                
-            elif self.decomp_method == "CKC":
-                # Implement Convolution Kernel Compensation method
-                # This is a more specialized EMG decomposition method
-                # For now we'll use MNE's UnsupervisedSpatialFilter as a placeholder
-                usf = UnsupervisedSpatialFilter(PCA(n_components=n_components))
-                components = usf.fit_transform(preprocessed_data.T)
-                mixing_matrix = usf.estimator.components_
-            
-            else:
-                logger.error(f"Unknown decomposition method: {self.decomp_method}")
-                return None, None, None
-            
-            # Store components and mixing matrix
-            self.components = components
-            self.mixing_matrix = mixing_matrix
-            
-            # Estimate spike trains from components
-            spike_trains = self._extract_spike_trains(components)
-            self.spike_trains = spike_trains
-            
-            logger.info(f"Successfully decomposed {n_components} motor units")
-            return components, mixing_matrix, spike_trains
-            
-        except Exception as e:
-            logger.error(f"Error during motor unit decomposition: {str(e)}")
-            return None, None, None
     
-    def _extract_spike_trains(self, components):
-        """Extract spike trains from decomposed components.
+    def extract_windowed_features(self, window_size=None, overlap=None, align_end=True):
+        """Extract features from multiple windows with overlap.
         
         Args:
-            components (numpy.ndarray): Decomposed components
-            
+            window_size (int): Window size in samples
+                If None, uses self.feature_window
+            overlap (float): Overlap ratio between windows (0.0-1.0)
+                If None, uses self.feature_overlap
+            align_end (bool): If True, aligns windows to the end of the buffer
+                
         Returns:
-            list: List of spike trains for each motor unit
+            list: List of feature dictionaries for each window
         """
-        if components is None:
+        if window_size is None:
+            window_size = self.feature_window
+        
+        if overlap is None:
+            overlap = self.feature_overlap
+        
+        # Ensure we have enough data
+        buffer_length = len(self.processed_buffers[0])
+        if buffer_length < window_size:
             return []
         
-        samples, n_components = components.shape
-        spike_trains = []
+        # Calculate step size between windows
+        step = int(window_size * (1 - overlap))
+        if step <= 0:
+            step = 1  # Ensure at least 1 sample step
         
-        for i in range(n_components):
-            # Normalize the component
-            comp = components[:, i]
-            comp_norm = (comp - np.mean(comp)) / np.std(comp)
-            
-            # Apply threshold for spike detection
-            # Typically spikes are identified as peaks above 3-5 standard deviations
-            threshold = 3.0
-            spike_candidate_indices = signal.find_peaks(comp_norm, height=threshold)[0]
-            
-            # Apply refractory period constraint (no spikes within 30ms = ~60 samples at 2kHz)
-            refractory = 60  
-            if len(spike_candidate_indices) > 0:
-                valid_spikes = [spike_candidate_indices[0]]
-                for j in range(1, len(spike_candidate_indices)):
-                    if spike_candidate_indices[j] - valid_spikes[-1] > refractory:
-                        valid_spikes.append(spike_candidate_indices[j])
-                
-                # Convert to binary spike train
-                spike_train = np.zeros(samples)
-                spike_train[valid_spikes] = 1
-            else:
-                spike_train = np.zeros(samples)
-                
-            spike_trains.append(spike_train)
-            
-        return spike_trains
+        # Calculate window positions
+        if align_end:
+            # Start from the end and work backward
+            start_positions = list(range(buffer_length - window_size, -1, -step))
+            start_positions.reverse()  # Order from oldest to newest
+        else:
+            # Start from the beginning
+            start_positions = list(range(0, buffer_length - window_size + 1, step))
+        
+        # Extract features for each window
+        windowed_features = []
+        for start in start_positions:
+            window = (start, start + window_size)
+            features = self.extract_features(window)
+            windowed_features.append(features)
+        
+        return windowed_features
     
-    def save_results(self, raw_emg=None, processed_emg=None, filename=None):
-        """Save processing results to file.
+    def calculate_envelopes(self, window_size=None, method='rms'):
+        """Calculate signal envelopes for each channel.
         
         Args:
-            raw_emg (numpy.ndarray): Raw EMG data
-            processed_emg (numpy.ndarray): Processed EMG data
-            filename (str): Optional filename, will be auto-generated if None
+            window_size (int): Window size for envelope calculation
+                If None, uses 100ms window
+            method (str): Envelope detection method ('rms', 'mav', or 'hilbert')
+                
+        Returns:
+            list: List of envelope values for each channel
+        """
+        if window_size is None:
+            window_size = int(0.1 * self.sampling_rate)  # 100ms window
+        
+        envelopes = []
+        
+        for ch in range(self.channel_count):
+            data = np.array(self.processed_buffers[ch])
+            
+            if len(data) == 0:
+                envelopes.append([])
+                continue
+            
+            if method == 'rms':
+                # Root Mean Square envelope
+                envelope = []
+                for i in range(len(data)):
+                    start = max(0, i - window_size // 2)
+                    end = min(len(data), i + window_size // 2)
+                    window_data = data[start:end]
+                    if len(window_data) > 0:
+                        envelope.append(np.sqrt(np.mean(window_data**2)))
+                    else:
+                        envelope.append(0)
+            
+            elif method == 'mav':
+                # Mean Absolute Value envelope
+                envelope = []
+                for i in range(len(data)):
+                    start = max(0, i - window_size // 2)
+                    end = min(len(data), i + window_size // 2)
+                    window_data = data[start:end]
+                    if len(window_data) > 0:
+                        envelope.append(np.mean(np.abs(window_data)))
+                    else:
+                        envelope.append(0)
+            
+            elif method == 'hilbert':
+                # Hilbert transform envelope
+                analytic_signal = signal.hilbert(data)
+                envelope = np.abs(analytic_signal)
+                
+                # Apply low-pass filter to smooth the envelope
+                b, a = signal.butter(2, 10 / (self.sampling_rate / 2), 'low')
+                envelope = signal.filtfilt(b, a, envelope)
+                envelope = envelope.tolist()
+            
+            else:
+                logger.warning(f"Unknown envelope method: {method}")
+                envelope = []
+            
+            envelopes.append(envelope)
+        
+        return envelopes
+    
+    def detect_muscle_activity(self, threshold_factor=3.0, min_duration=0.2):
+        """Detect muscle activity in the signal.
+        
+        Args:
+            threshold_factor (float): Multiplication factor for the standard deviation
+                to use as activity threshold
+            min_duration (float): Minimum activity duration in seconds
+                
+        Returns:
+            list: List of activity segments for each channel,
+                each segment is a tuple (start_idx, end_idx)
+        """
+        min_samples = int(min_duration * self.sampling_rate)
+        activities = []
+        
+        for ch in range(self.channel_count):
+            data = np.array(self.processed_buffers[ch])
+            
+            if len(data) == 0:
+                activities.append([])
+                continue
+            
+            # Calculate baseline noise
+            noise_level = np.std(data[:int(0.1 * len(data))])
+            threshold = threshold_factor * noise_level
+            
+            # Detect activity
+            activity = np.abs(data) > threshold
+            
+            # Find segments
+            segments = []
+            in_segment = False
+            start_idx = 0
+            
+            for i, active in enumerate(activity):
+                if active and not in_segment:
+                    # Start of segment
+                    in_segment = True
+                    start_idx = i
+                elif not active and in_segment:
+                    # End of segment
+                    if i - start_idx >= min_samples:
+                        segments.append((start_idx, i))
+                    in_segment = False
+            
+            # Check for activity at end of buffer
+            if in_segment and len(data) - start_idx >= min_samples:
+                segments.append((start_idx, len(data)))
+            
+            activities.append(segments)
+        
+        return activities
+    
+    def plot_signals(self, raw=True, processed=True, envelopes=True, show=True):
+        """Plot the EMG signals for visualization.
+        
+        Args:
+            raw (bool): Whether to plot raw signals
+            processed (bool): Whether to plot processed signals
+            envelopes (bool): Whether to plot signal envelopes
+            show (bool): Whether to show the plot immediately
+                
+        Returns:
+            matplotlib.figure.Figure: The created figure
+        """
+        n_rows = self.channel_count
+        time_raw = np.arange(len(self.raw_buffers[0])) / self.sampling_rate
+        time_proc = np.arange(len(self.processed_buffers[0])) / self.sampling_rate
+        
+        fig, axes = plt.subplots(n_rows, 1, figsize=(10, n_rows * 2), sharex=True)
+        if n_rows == 1:
+            axes = [axes]  # Make sure axes is iterable
+        
+        for ch in range(self.channel_count):
+            ax = axes[ch]
+            
+            if raw and len(self.raw_buffers[ch]) > 0:
+                ax.plot(time_raw, self.raw_buffers[ch], 'b-', alpha=0.5, label='Raw')
+            
+            if processed and len(self.processed_buffers[ch]) > 0:
+                ax.plot(time_proc, self.processed_buffers[ch], 'g-', alpha=0.7, label='Processed')
+            
+            if envelopes and len(self.processed_buffers[ch]) > 0:
+                env_data = self.calculate_envelopes(method='rms')[ch]
+                if len(env_data) > 0:
+                    time_env = np.arange(len(env_data)) / self.sampling_rate
+                    ax.plot(time_env, env_data, 'r-', linewidth=2, label='Envelope')
+            
+            ax.set_ylabel(f'CH {ch+1}')
+            ax.grid(True, alpha=0.3)
+            
+            if ch == 0:
+                ax.legend(loc='upper right')
+        
+        axes[-1].set_xlabel('Time (s)')
+        fig.tight_layout()
+        
+        if show:
+            plt.show()
+        
+        return fig
+    
+    def clear_buffers(self):
+        """Clear all signal buffers."""
+        self.raw_buffers = [[] for _ in range(self.channel_count)]
+        self.processed_buffers = [[] for _ in range(self.channel_count)]
+        
+        # Reset filter states
+        self.hp_zi = [signal.lfilter_zi(self.hp_b, self.hp_a) for _ in range(self.channel_count)]
+        self.lp_zi = [signal.lfilter_zi(self.lp_b, self.lp_a) for _ in range(self.channel_count)]
+        self.notch_zi = [signal.lfilter_zi(self.notch_b, self.notch_a) for _ in range(self.channel_count)]
+    
+    def start_background_processing(self, input_queue, output_queue, stop_event=None):
+        """Start background processing worker in a separate process.
+        
+        Args:
+            input_queue (Queue): Queue for incoming EMG samples
+            output_queue (Queue): Queue for outgoing processed data
+            stop_event (Event): Event to signal worker to stop
             
         Returns:
-            str: Path to the saved file
+            Process: The background worker process
         """
-        if not os.path.exists(self.save_dir):
-            os.makedirs(self.save_dir)
-            
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"emg_processing_{timestamp}.h5"
+        # Create process
+        worker = Process(
+            target=EMGProcessor._background_worker,
+            args=(input_queue, output_queue, stop_event,
+                  self.channel_count, self.sampling_rate,
+                  EMG_PROCESSING)
+        )
         
-        file_path = os.path.join(self.save_dir, filename)
+        # Start process
+        worker.daemon = True
+        worker.start()
         
-        try:
-            with h5py.File(file_path, 'w') as f:
-                # Save timestamps
-                f.attrs['timestamp'] = datetime.now().isoformat()
-                f.attrs['decomposition_method'] = self.decomp_method
-                
-                # Save raw data if provided and configured
-                if RECORDING["save_raw_emg"] and raw_emg is not None:
-                    f.create_dataset('raw_emg', data=raw_emg)
-                
-                # Save processed data if provided and configured
-                if RECORDING["save_processed_emg"] and processed_emg is not None:
-                    f.create_dataset('processed_emg', data=processed_emg)
-                
-                # Save decomposition results if available
-                if RECORDING["save_decomposed_mus"]:
-                    if self.components is not None:
-                        f.create_dataset('components', data=self.components)
-                    if self.mixing_matrix is not None:
-                        f.create_dataset('mixing_matrix', data=self.mixing_matrix)
-                    if self.spike_trains and len(self.spike_trains) > 0:
-                        spike_train_data = np.vstack(self.spike_trains)
-                        f.create_dataset('spike_trains', data=spike_train_data)
-            
-            logger.info(f"Results saved to {file_path}")
-            return file_path
-            
-        except Exception as e:
-            logger.error(f"Error saving results: {str(e)}")
-            return None
+        return worker
     
-    def plot_decomposition(self, n_components=5):
-        """Plot decomposition results for visualization.
+    @staticmethod
+    def _background_worker(input_queue, output_queue, stop_event, 
+                          channel_count, sampling_rate, config):
+        """Background worker function for EMG processing.
         
         Args:
-            n_components (int): Number of components to plot
+            input_queue (Queue): Queue for incoming EMG samples
+            output_queue (Queue): Queue for outgoing processed data
+            stop_event (Event): Event to signal worker to stop
+            channel_count (int): Number of EMG channels
+            sampling_rate (int): Sampling rate in Hz
+            config (dict): Configuration dictionary
         """
-        if self.components is None or self.spike_trains is None:
-            logger.warning("No decomposition results to plot")
-            return
+        # Create processor
+        processor = EMGProcessor(channel_count, sampling_rate)
         
-        # Limit to available components
-        n_components = min(n_components, len(self.spike_trains))
+        # Processing loop
+        last_feature_time = time.time()
         
-        plt.figure(figsize=(12, 8))
+        while stop_event is None or not stop_event.is_set():
+            try:
+                # Get samples from queue (non-blocking)
+                try:
+                    samples = input_queue.get(block=False)
+                    
+                    # Process samples
+                    processed = processor.add_samples(samples)
+                    
+                    # Put processed samples in output queue
+                    output_queue.put(("processed", processed))
+                    
+                except Exception as e:
+                    # Queue is empty or other error
+                    if not isinstance(e, Queue.Empty):
+                        logging.error(f"Error processing samples: {str(e)}")
+                    
+                    # Sleep a bit to avoid busy waiting
+                    time.sleep(0.001)
+                
+                # Extract features periodically
+                current_time = time.time()
+                if current_time - last_feature_time >= config["feature_interval"]:
+                    # Extract features
+                    features = processor.extract_features()
+                    
+                    # Put features in output queue
+                    output_queue.put(("features", features))
+                    
+                    # Calculate envelopes
+                    envelopes = processor.calculate_envelopes()
+                    
+                    # Put envelopes in output queue
+                    output_queue.put(("envelopes", envelopes))
+                    
+                    # Update last feature time
+                    last_feature_time = current_time
+            
+            except Exception as e:
+                logging.error(f"Error in EMG background worker: {str(e)}")
+                time.sleep(0.1)
         
-        # Plot a subset of components
-        for i in range(n_components):
-            plt.subplot(n_components, 1, i+1)
-            
-            # Get component and spike train
-            component = self.components[:, i]
-            spike_train = self.spike_trains[i]
-            
-            # Plot the component
-            plt.plot(component, 'b-', linewidth=0.5)
-            
-            # Mark the spikes
-            spike_indices = np.where(spike_train > 0)[0]
-            plt.plot(spike_indices, component[spike_indices], 'r*')
-            
-            plt.title(f"Motor Unit {i+1}")
-            plt.tight_layout()
-        
-        plt.show()
+        logging.info("EMG background worker stopped")
+
 
 if __name__ == "__main__":
-    # Simple test script
+    # Test script for EMG processor
     import matplotlib.pyplot as plt
+    import numpy as np
     
-    # Generate synthetic EMG data for testing
-    channels = 64
-    samples = 2048 * 5  # 5 seconds at 2048 Hz
+    print("Testing EMG Processor...")
     
-    # Create synthetic EMG with some "motor units" firing
-    emg_data = np.random.normal(0, 0.5, (channels, samples))
+    # Create processor
+    processor = EMGProcessor(channel_count=8, sampling_rate=2000)
     
-    # Add simulated motor unit spikes
-    for i in range(5):  # 5 synthetic motor units
-        # Firing rate between 8-20 Hz
-        firing_rate = 8 + 12 * i / 5
-        isis = np.random.normal(2048/firing_rate, 2048/firing_rate/10, 
-                               int(samples * firing_rate / 2048 * 1.2))
-        spike_times = np.cumsum(isis).astype(int)
-        spike_times = spike_times[spike_times < samples]
+    # Generate some test data
+    duration = 1.0  # seconds
+    num_samples = int(duration * processor.sampling_rate)
+    time_points = np.linspace(0, duration, num_samples)
+    
+    # Generate signals for each channel
+    channel_data = []
+    
+    for ch in range(processor.channel_count):
+        # Base frequency for this channel
+        base_freq = 50 + ch * 10  # Hz
         
-        # MU shape
-        mu_shape = signal.gaussian(50, 5)
+        # Generate sinusoidal signal with noise
+        signal = np.sin(2 * np.pi * base_freq * time_points)
         
-        # Different weights for channels
-        weights = np.random.normal(0, 1, channels)
+        # Add muscle activation pattern
+        if ch < 4:  # Only for first 4 channels
+            # Create muscle activation envelope (contraction)
+            envelope = np.zeros_like(time_points)
+            start_idx = int(0.2 * num_samples)
+            end_idx = int(0.8 * num_samples)
+            ramp_samples = int(0.1 * num_samples)
+            
+            # Ramp up
+            envelope[start_idx:start_idx+ramp_samples] = np.linspace(0, 1, ramp_samples)
+            # Plateau
+            envelope[start_idx+ramp_samples:end_idx-ramp_samples] = 1
+            # Ramp down
+            envelope[end_idx-ramp_samples:end_idx] = np.linspace(1, 0, ramp_samples)
+            
+            # Modulate signal amplitude
+            signal *= (0.2 + 0.8 * envelope)
         
-        # Add to each channel
-        for t in spike_times:
-            if t + len(mu_shape) < samples:
-                for ch in range(channels):
-                    emg_data[ch, t:t+len(mu_shape)] += weights[ch] * mu_shape * (2 + i)
+        # Add higher frequency components
+        signal += 0.2 * np.sin(2 * np.pi * base_freq * 2 * time_points)
+        signal += 0.1 * np.sin(2 * np.pi * base_freq * 3 * time_points)
+        
+        # Add noise
+        noise = 0.1 * np.random.randn(num_samples)
+        signal += noise
+        
+        # Add power line noise (50 Hz)
+        signal += 0.1 * np.sin(2 * np.pi * 50 * time_points)
+        
+        channel_data.append(signal)
     
-    # Process the synthetic data
-    processor = EMGProcessor()
-    processed_data = processor.preprocess(emg_data)
-    features = processor.extract_features(processed_data)
+    # Transpose to get (samples, channels) format
+    test_data = np.column_stack(channel_data)
     
-    components, mixing, spikes = processor.decompose_motor_units(processed_data, n_components=10)
+    # Process the data
+    print("\nProcessing test data...")
+    processed = processor.add_samples(test_data)
+    print(f"Processed {len(processed[0])} samples for {len(processed)} channels")
     
-    # Plot results
-    processor.plot_decomposition(n_components=5)
+    # Extract features
+    print("\nExtracting features...")
+    features = processor.extract_features()
+    for feature_name, values in features.items():
+        print(f"{feature_name}: {values}")
     
-    # Save results
-    processor.save_results(raw_emg=emg_data, processed_emg=processed_data)
+    # Extract windowed features
+    print("\nExtracting windowed features...")
+    window_size = int(0.2 * processor.sampling_rate)  # 200 ms windows
+    windowed_features = processor.extract_windowed_features(window_size=window_size, overlap=0.5)
+    print(f"Extracted features for {len(windowed_features)} windows")
     
-    print("EMG processing test completed")
+    # Calculate envelopes
+    print("\nCalculating envelopes...")
+    envelopes = processor.calculate_envelopes()
+    print(f"Envelope length: {len(envelopes[0])} samples for {len(envelopes)} channels")
+    
+    # Detect muscle activity
+    print("\nDetecting muscle activity...")
+    activities = processor.detect_muscle_activity()
+    for ch, segments in enumerate(activities):
+        print(f"Channel {ch+1}: {len(segments)} activity segments")
+        for i, (start, end) in enumerate(segments):
+            duration = (end - start) / processor.sampling_rate
+            print(f"  Segment {i+1}: {start}-{end} ({duration:.3f} seconds)")
+    
+    # Plot the signals
+    print("\nPlotting signals...")
+    processor.plot_signals()

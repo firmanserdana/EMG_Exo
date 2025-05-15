@@ -3,240 +3,432 @@
 
 """
 EMG Acquisition Module
-Handles communication with the Sessantaquatro board and EMG signal acquisition.
+Handles communication with the Sessantaquatro EMG board and acquires data.
 """
 
+import numpy as np
 import time
 import threading
-import numpy as np
+import queue
 import serial
+import os
+import struct
+from datetime import datetime
 import logging
-from queue import Queue
-import pylsl
 
 from ini import EMG_CONFIG, logger
 
 class SessantaquatroEMG:
-    """Class for handling communication with the Sessantaquatro EMG board."""
+    """Class for communicating with the Sessantaquatro EMG board."""
     
     def __init__(self, port=None, baudrate=None):
-        """Initialize the EMG acquisition system."""
+        """Initialize the EMG board interface.
+        
+        Args:
+            port (str): COM port for the board connection
+            baudrate (int): Baudrate for serial communication
+        """
         self.port = port or EMG_CONFIG["port"]
         self.baudrate = baudrate or EMG_CONFIG["baudrate"]
         self.sampling_rate = EMG_CONFIG["sampling_rate"]
         self.channels = EMG_CONFIG["channels"]
-        self.serial_conn = None
+        self.resolution = EMG_CONFIG["resolution"]
+        
+        # Serial connection
+        self.serial = None
+        self.is_connected = False
+        
+        # Data acquisition
         self.is_streaming = False
-        self.data_queue = Queue()
-        self.thread = None
-        self.lsl_outlet = None
-        logger.info(f"EMG acquisition initialized with {self.channels} channels at {self.sampling_rate}Hz")
+        self.acquisition_thread = None
+        self.data_buffer = queue.Queue(maxsize=100)  # Buffer for 100 data chunks
+        
+        logger.info(f"Sessantaquatro EMG initialized (port: {self.port}, baudrate: {self.baudrate})")
     
     def connect(self):
-        """Establish connection with the Sessantaquatro board."""
+        """Connect to the EMG board.
+        
+        Returns:
+            bool: True if connection successful
+        """
         try:
-            self.serial_conn = serial.Serial(
-                self.port, 
-                self.baudrate, 
+            self.serial = serial.Serial(
+                port=self.port,
+                baudrate=self.baudrate,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
                 timeout=1
             )
-            logger.info(f"Connected to Sessantaquatro board on {self.port}")
-            return True
+            
+            # Test if connection is valid
+            if not self.serial.is_open:
+                self.serial.open()
+                
+            # Wait for device to initialize
+            time.sleep(2)
+            
+            # Send a test command
+            self.serial.write(b"TEST\r\n")
+            response = self.serial.read(100)  # Read some bytes
+            
+            if len(response) > 0:
+                self.is_connected = True
+                logger.info(f"Connected to EMG board on port {self.port}")
+                return True
+            else:
+                logger.error("No response from EMG board")
+                self.serial.close()
+                self.is_connected = False
+                return False
+                
         except serial.SerialException as e:
-            logger.error(f"Failed to connect to Sessantaquatro board: {str(e)}")
+            logger.error(f"Error connecting to EMG board: {str(e)}")
+            self.is_connected = False
             return False
     
     def disconnect(self):
-        """Close connection with the Sessantaquatro board."""
-        if self.serial_conn and self.serial_conn.is_open:
+        """Disconnect from the EMG board."""
+        if self.is_streaming:
             self.stop_streaming()
-            self.serial_conn.close()
-            logger.info("Disconnected from Sessantaquatro board")
+            
+        if self.serial and self.serial.is_open:
+            self.serial.close()
+            
+        self.is_connected = False
+        logger.info("Disconnected from EMG board")
     
     def configure_board(self):
-        """Send configuration commands to the board."""
-        if not self.serial_conn or not self.serial_conn.is_open:
-            logger.error("Cannot configure board: Not connected")
-            return False
+        """Configure the EMG board settings.
         
+        Returns:
+            bool: True if configuration successful
+        """
+        if not self.is_connected:
+            logger.error("Cannot configure: Not connected to EMG board")
+            return False
+            
         try:
-            # Example configuration commands (replace with actual commands)
-            # These will depend on the specific protocol of the Sessantaquatro board
-            self.serial_conn.write(b'SAMPLING_RATE:2048\n')
-            time.sleep(0.1)
-            self.serial_conn.write(b'CHANNELS:64\n')
-            time.sleep(0.1)
-            self.serial_conn.write(b'RESOLUTION:24\n')
+            # Clear any pending data
+            self.serial.reset_input_buffer()
+            
+            # Configure sampling rate
+            self.serial.write(f"SET SAMPLING_RATE {self.sampling_rate}\r\n".encode())
             time.sleep(0.1)
             
-            # Read acknowledgement
-            response = self.serial_conn.readline().decode('utf-8').strip()
-            if 'OK' in response:
-                logger.info("Board configured successfully")
-                return True
-            else:
-                logger.error(f"Board configuration failed: {response}")
+            # Configure channels
+            self.serial.write(f"SET CHANNELS {self.channels}\r\n".encode())
+            time.sleep(0.1)
+            
+            # Configure resolution
+            self.serial.write(f"SET RESOLUTION {self.resolution}\r\n".encode())
+            time.sleep(0.1)
+            
+            # Configure reference mode
+            self.serial.write(f"SET REFERENCE {EMG_CONFIG['reference'].upper()}\r\n".encode())
+            time.sleep(0.1)
+            
+            # Check configuration
+            self.serial.write(b"GET CONFIG\r\n")
+            time.sleep(0.2)
+            
+            # Read response - this is simplified, actual protocol may differ
+            response = self.serial.read_all().decode('ascii', errors='ignore')
+            
+            if "ERROR" in response:
+                logger.error(f"Error configuring EMG board: {response}")
                 return False
+                
+            logger.info("EMG board configured successfully")
+            return True
+            
         except Exception as e:
-            logger.error(f"Error configuring board: {str(e)}")
+            logger.error(f"Error configuring EMG board: {str(e)}")
             return False
     
-    def _streaming_thread(self):
-        """Thread function for continuous data acquisition."""
-        buffer = np.zeros((self.channels, 0))
-        bytes_per_sample = 3  # 24-bit resolution = 3 bytes
-        bytes_per_frame = bytes_per_sample * self.channels
+    def start_streaming(self):
+        """Start streaming EMG data from the board.
         
-        logger.info("Starting EMG data streaming")
+        Returns:
+            bool: True if streaming started successfully
+        """
+        if not self.is_connected:
+            logger.error("Cannot start streaming: Not connected to EMG board")
+            return False
+            
+        if self.is_streaming:
+            logger.warning("Streaming is already active")
+            return True
+            
+        try:
+            # Clear buffers
+            self.serial.reset_input_buffer()
+            self.serial.reset_output_buffer()
+            while not self.data_buffer.empty():
+                self.data_buffer.get()
+            
+            # Send streaming command
+            self.serial.write(b"START STREAMING\r\n")
+            time.sleep(0.1)
+            
+            # Check response
+            response = self.serial.read_all().decode('ascii', errors='ignore')
+            if "ERROR" in response:
+                logger.error(f"Error starting streaming: {response}")
+                return False
+                
+            # Start acquisition thread
+            self.is_streaming = True
+            self.acquisition_thread = threading.Thread(target=self._acquisition_loop)
+            self.acquisition_thread.daemon = True
+            self.acquisition_thread.start()
+            
+            logger.info("EMG data streaming started")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error starting streaming: {str(e)}")
+            return False
+    
+    def stop_streaming(self):
+        """Stop streaming EMG data from the board."""
+        if not self.is_streaming:
+            return
+            
+        try:
+            # Send stop command
+            self.serial.write(b"STOP STREAMING\r\n")
+            
+            # Flag for thread termination
+            self.is_streaming = False
+            
+            # Wait for thread to end
+            if self.acquisition_thread:
+                self.acquisition_thread.join(timeout=2.0)
+                self.acquisition_thread = None
+                
+            logger.info("EMG data streaming stopped")
+            
+        except Exception as e:
+            logger.error(f"Error stopping streaming: {str(e)}")
+    
+    def _acquisition_loop(self):
+        """Thread function for continuous data acquisition."""
+        logger.info("Acquisition thread started")
+        
+        # Calculate bytes per sample
+        bytes_per_channel = int(np.ceil(self.resolution / 8))
+        bytes_per_sample = bytes_per_channel * self.channels
+        
+        # Calculate expected acquisition rate
+        samples_per_chunk = 32  # Process data in chunks
+        samples_per_second = self.sampling_rate
+        chunk_time = samples_per_chunk / samples_per_second
         
         while self.is_streaming:
             try:
-                # Read a full frame of data
-                raw_data = self.serial_conn.read(bytes_per_frame)
+                start_time = time.time()
                 
-                if len(raw_data) < bytes_per_frame:
-                    logger.warning(f"Incomplete data frame received: {len(raw_data)} bytes")
+                # Wait for enough data - account for header and footer
+                timeout_time = start_time + chunk_time * 2
+                while self.serial.in_waiting < (bytes_per_sample * samples_per_chunk + 16) and time.time() < timeout_time:
+                    time.sleep(0.001)
+                
+                if self.serial.in_waiting < (bytes_per_sample * samples_per_chunk + 16):
+                    logger.warning(f"Timeout waiting for data. Available: {self.serial.in_waiting} bytes")
                     continue
                 
-                # Parse the raw data into EMG samples
-                frame = np.zeros(self.channels)
-                for ch in range(self.channels):
-                    # Parse 24-bit values (adjust based on actual data format)
-                    start_idx = ch * bytes_per_sample
-                    value = int.from_bytes(
-                        raw_data[start_idx:start_idx + bytes_per_sample],
-                        byteorder='little',
-                        signed=True
-                    )
-                    frame[ch] = value
+                # Read one chunk of raw data
+                raw_data = self.serial.read(bytes_per_sample * samples_per_chunk + 16)
                 
-                # Add the frame to our buffer
-                buffer = np.column_stack((buffer, frame))
+                # Parse the data - this is a simplified example
+                # Actual protocol implementation would depend on the Sessantaquatro board
+                # specifications and might involve parsing headers, footers, etc.
+                emg_data = self._parse_raw_data(raw_data, samples_per_chunk)
                 
-                # When buffer reaches certain size, process and push to queue
-                if buffer.shape[1] >= self.sampling_rate // 10:  # Process 100ms blocks
-                    self.data_queue.put(buffer.copy())
-                    
-                    # Also send to LSL if configured
-                    if self.lsl_outlet:
-                        for i in range(buffer.shape[1]):
-                            self.lsl_outlet.push_sample(buffer[:, i])
-                    
-                    buffer = np.zeros((self.channels, 0))
+                if emg_data is not None:
+                    # Put data in the queue
+                    try:
+                        self.data_buffer.put(emg_data, block=False)
+                    except queue.Full:
+                        # If queue is full, get one item then put the new one
+                        self.data_buffer.get()
+                        self.data_buffer.put(emg_data)
+                
+                # Calculate and adjust sleep time to maintain target rate
+                elapsed = time.time() - start_time
+                sleep_time = max(0, chunk_time - elapsed)
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
                     
             except Exception as e:
-                logger.error(f"Error in streaming thread: {str(e)}")
+                logger.error(f"Error in acquisition loop: {str(e)}")
                 if not self.is_streaming:
-                    break  # Exit if streaming was stopped
-                time.sleep(0.1)  # Brief pause before retrying
+                    break
+                time.sleep(0.1)
+        
+        logger.info("Acquisition thread ended")
     
-    def start_streaming(self):
-        """Start continuous EMG data acquisition."""
-        if self.is_streaming:
-            logger.warning("Streaming is already active")
-            return False
-        
-        if not self.serial_conn or not self.serial_conn.is_open:
-            logger.error("Cannot start streaming: Not connected")
-            return False
-        
-        # Set up LSL stream
-        info = pylsl.StreamInfo(
-            name='Sessantaquatro_EMG',
-            type='EMG',
-            channel_count=self.channels,
-            nominal_srate=self.sampling_rate,
-            channel_format='float32',
-            source_id='sessantaquatro123'
-        )
-        
-        # Add channel metadata
-        channels = info.desc().append_child("channels")
-        for c in range(self.channels):
-            channels.append_child("channel") \
-                .append_child_value("label", f"EMG{c+1}") \
-                .append_child_value("unit", "uV") \
-                .append_child_value("type", "EMG")
-        
-        self.lsl_outlet = pylsl.StreamOutlet(info)
-        
-        # Start the acquisition thread
-        self.is_streaming = True
-        self.thread = threading.Thread(target=self._streaming_thread)
-        self.thread.daemon = True
-        self.thread.start()
-        logger.info("EMG streaming started")
-        return True
-    
-    def stop_streaming(self):
-        """Stop EMG data acquisition."""
-        if not self.is_streaming:
-            return
-        
-        self.is_streaming = False
-        if self.thread:
-            self.thread.join(timeout=2.0)
-            self.thread = None
-        
-        logger.info("EMG streaming stopped")
-    
-    def get_data(self, blocking=True, timeout=None):
-        """Retrieve acquired EMG data from the queue.
+    def _parse_raw_data(self, raw_data, samples_per_chunk):
+        """Parse raw binary data from the EMG board.
         
         Args:
-            blocking (bool): If True, block until data is available
-            timeout (float): Maximum time to wait for data
+            raw_data (bytes): Raw binary data from the board
+            samples_per_chunk (int): Number of samples expected in this chunk
             
         Returns:
-            numpy.ndarray or None: EMG data with shape (channels, samples)
+            numpy.ndarray: EMG data array with shape (channels, samples)
         """
         try:
-            return self.data_queue.get(block=blocking, timeout=timeout)
-        except Exception:
+            # Check that we have the right amount of data
+            bytes_per_channel = int(np.ceil(self.resolution / 8))
+            bytes_per_sample = bytes_per_channel * self.channels
+            expected_data_size = bytes_per_sample * samples_per_chunk
+            
+            if len(raw_data) < expected_data_size:
+                logger.error(f"Invalid data size: {len(raw_data)}, expected at least {expected_data_size}")
+                return None
+                
+            # TODO: In a real implementation, we would need to:
+            # 1. Parse the header (e.g., check sync bytes)
+            # 2. Extract timestamp information
+            # 3. Check data integrity (e.g., CRC)
+            
+            # For this example, we'll assume a simplified binary format where
+            # each sample consists of sequential values for each channel
+            
+            # Initialize array for parsed data
+            emg_data = np.zeros((self.channels, samples_per_chunk), dtype=np.float32)
+            
+            # Parse each sample
+            for sample_idx in range(samples_per_chunk):
+                offset = 8  # Assuming a header of 8 bytes
+                offset += sample_idx * bytes_per_sample
+                
+                # Parse each channel
+                for ch_idx in range(self.channels):
+                    ch_offset = offset + ch_idx * bytes_per_channel
+                    
+                    if bytes_per_channel == 2:  # 16-bit values
+                        value = struct.unpack("<h", raw_data[ch_offset:ch_offset+2])[0]
+                        # Convert to microvolts
+                        emg_data[ch_idx, sample_idx] = value * 0.0298
+                        
+                    elif bytes_per_channel == 3:  # 24-bit values
+                        value_bytes = raw_data[ch_offset:ch_offset+3] + b'\x00'
+                        value = struct.unpack("<i", value_bytes)[0] >> 8
+                        # Convert to microvolts, assuming a scaling factor
+                        emg_data[ch_idx, sample_idx] = value * 0.0018
+                        
+                    elif bytes_per_channel == 4:  # 32-bit values
+                        value = struct.unpack("<i", raw_data[ch_offset:ch_offset+4])[0]
+                        # Convert to microvolts, assuming a scaling factor
+                        emg_data[ch_idx, sample_idx] = value * 0.00012
+                        
+            return emg_data
+            
+        except Exception as e:
+            logger.error(f"Error parsing EMG data: {str(e)}")
             return None
     
-    def flush_data(self):
-        """Clear all data from the queue."""
-        while not self.data_queue.empty():
-            try:
-                self.data_queue.get_nowait()
-            except:
-                break
-        logger.info("Data queue flushed")
+    def get_data(self, blocking=False, timeout=None):
+        """Get a chunk of EMG data from the buffer.
+        
+        Args:
+            blocking (bool): If True, wait until data is available
+            timeout (float): Maximum time to wait if blocking is True
+            
+        Returns:
+            numpy.ndarray: EMG data array with shape (channels, samples)
+                           or None if no data is available
+        """
+        if not self.is_streaming:
+            return None
+            
+        try:
+            if blocking:
+                return self.data_buffer.get(block=True, timeout=timeout)
+            else:
+                if self.data_buffer.empty():
+                    return None
+                return self.data_buffer.get(block=False)
+                
+        except queue.Empty:
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting EMG data: {str(e)}")
+            return None
+
+    def simulate_data(self, duration=1.0):
+        """Generate simulated EMG data for testing.
+        
+        Args:
+            duration (float): Duration of data in seconds
+            
+        Returns:
+            numpy.ndarray: Simulated EMG data array with shape (channels, samples)
+        """
+        samples = int(duration * self.sampling_rate)
+        emg_data = np.random.normal(0, 50, (self.channels, samples))
+        
+        # Add synthetic EMG bursts to some channels
+        for burst in range(5):
+            ch = np.random.randint(0, self.channels)
+            start = np.random.randint(0, samples - 200)
+            end = start + 200
+            
+            # Generate a burst envelope
+            envelope = np.hanning(end - start)
+            
+            # Apply envelope to random noise for realistic EMG
+            burst_data = np.random.normal(0, 500, end - start) * envelope
+            
+            # Add burst to channel
+            emg_data[ch, start:end] += burst_data
+            
+        logger.debug(f"Generated {duration}s of simulated EMG data")
+        return emg_data
+        
 
 if __name__ == "__main__":
     # Simple test script
-    import matplotlib.pyplot as plt
-    
     emg = SessantaquatroEMG()
-    if emg.connect():
-        print("Connected to board")
-        emg.configure_board()
-        emg.start_streaming()
-        
-        # Collect for 5 seconds
-        print("Collecting data for 5 seconds...")
-        start_time = time.time()
-        collected_data = []
-        
-        while time.time() - start_time < 5:
-            data = emg.get_data(blocking=True, timeout=1.0)
-            if data is not None:
-                collected_data.append(data)
-                print(f"Received data block: {data.shape}")
-        
-        emg.stop_streaming()
-        emg.disconnect()
-        
-        # Plot some channels
-        if collected_data:
-            all_data = np.hstack(collected_data)
-            plt.figure(figsize=(12, 8))
-            for i in range(min(8, emg.channels)):  # Plot first 8 channels
-                plt.subplot(8, 1, i+1)
-                plt.plot(all_data[i, :])
-                plt.title(f"Channel {i+1}")
-                plt.tight_layout()
-            plt.show()
-    else:
-        print("Failed to connect to board")
+    
+    print("Testing EMG acquisition...")
+    try:
+        if emg.connect():
+            print("Connected to EMG board")
+            
+            if emg.configure_board():
+                print("Board configured")
+                
+                print("Starting streaming...")
+                if emg.start_streaming():
+                    print("Streaming started")
+                    
+                    print("Acquiring data for 5 seconds...")
+                    for i in range(10):
+                        data = emg.get_data(blocking=True, timeout=1.0)
+                        if data is not None:
+                            print(f"Got data chunk: {data.shape}, mean={data.mean():.2f}, std={data.std():.2f}")
+                        else:
+                            print("No data received")
+                    
+                    print("Stopping streaming...")
+                    emg.stop_streaming()
+                    
+            emg.disconnect()
+            print("Disconnected from EMG board")
+            
+        else:
+            print("Failed to connect. Using simulated data instead.")
+            
+            # Test with simulated data
+            print("Generating simulated data...")
+            simulated_data = emg.simulate_data(duration=2.0)
+            print(f"Simulated data shape: {simulated_data.shape}")
+            print(f"Mean: {simulated_data.mean():.2f}, Std: {simulated_data.std():.2f}")
+            
+    except Exception as e:
+        print(f"Error in test script: {str(e)}")

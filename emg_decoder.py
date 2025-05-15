@@ -2,502 +2,531 @@
 # -*- coding: utf-8 -*-
 
 """
-EMG Decoding Module
-Performs gesture and movement classification from EMG signals using machine learning.
+EMG Decoder Module
+Handles classification of EMG signals into hand gestures for controlling the hand.
 """
 
 import numpy as np
-import time
 import os
-import pickle
+import time
+import joblib
 from datetime import datetime
 import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neural_network import MLPClassifier
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import confusion_matrix, accuracy_score, classification_report
-import joblib
-import h5py
-import pandas as pd
+from sklearn.metrics import accuracy_score, confusion_matrix
+import logging
 
-from ini import DECODING, DOF_CONFIG, MODEL_DIR, logger
-
+from ini import DECODING, MODEL_DIR, logger
+from emg_processing import EMGProcessor
 
 class EMGDecoder:
-    """Class for decoding EMG signals into hand/finger movements."""
+    """Class for classifying EMG signals into hand gestures."""
     
     def __init__(self):
-        """Initialize the EMG decoder."""
+        """Initialize the EMG decoder with default settings."""
         self.classifiers = {}
-        self.scalers = {}
-        self.feature_names = DECODING["features"]
-        self.gesture_names = self._get_gesture_names()
-        self.training_ratio = DECODING["training_ratio"]
-        self.cv_folds = DECODING["cv_folds"]
-        self.normalize = DECODING["normalize"]
-        self.model_dir = MODEL_DIR
-        self.trained = False
+        self.scaler = StandardScaler()
+        self.is_trained = False
+        self.features_list = DECODING["features"]
         
-        # Initialize classifiers
-        self._create_classifiers()
+        # Create model directory if it doesn't exist
+        os.makedirs(MODEL_DIR, exist_ok=True)
         
-        logger.info("EMG decoder initialized")
+        # Define supported hand gestures
+        self.gestures = {
+            0: "rest",
+            1: "thumb_flexion",
+            2: "thumb_extension",
+            3: "thumb_pinch",
+            4: "index_flexion",
+            5: "index_extension",
+            6: "index_pinch",
+            7: "middle_flexion",
+            8: "middle_extension",
+            9: "middle_pinch",
+            10: "ring_little_flexion",
+            11: "ring_little_extension",
+            12: "thumb_abduction"
+        }
         
-    def _get_gesture_names(self):
-        """Generate gesture names from DoF configuration.
+        # Initialize classifiers specified in config
+        self._initialize_classifiers()
         
-        Returns:
-            list: List of gesture names
-        """
-        gestures = []
-        
-        # Add finger movements based on DOF_CONFIG
-        for finger in ["thumb", "index", "middle"]:
-            for movement in DOF_CONFIG[finger]:
-                gestures.append(f"{finger}_{movement}")
-        
-        # Add ring and little finger movements
-        for movement in DOF_CONFIG["ring_little"]:
-            gestures.append(f"ring_little_{movement}")
-        
-        # Add thumb abduction if configured
-        if DOF_CONFIG["thumb_abduction"]:
-            gestures.append("thumb_abduction")
-            
-        # Add some combined gestures (common hand postures)
-        gestures.extend([
-            "power_grip", 
-            "precision_grip", 
-            "rest",
-            "open_hand"
-        ])
-        
-        return gestures
-        
-    def _create_classifiers(self):
-        """Create and initialize the configured classifiers."""
-        if "kNN" in DECODING["classifiers"]:
-            self.classifiers["kNN"] = KNeighborsClassifier(
-                n_neighbors=5,
-                weights='distance',
-                algorithm='auto',
-                leaf_size=30, 
-                p=2,  # Euclidean distance
-                metric='minkowski'
-            )
-            self.scalers["kNN"] = StandardScaler()
-            
-        if "MLP" in DECODING["classifiers"]:
-            self.classifiers["MLP"] = MLPClassifier(
-                hidden_layer_sizes=(100, 100),
-                activation='relu',
-                solver='adam',
-                alpha=0.0001,
-                batch_size='auto',
-                learning_rate='adaptive',
-                max_iter=500,
-                early_stopping=True,
-                validation_fraction=0.1,
-                random_state=42
-            )
-            self.scalers["MLP"] = StandardScaler()
+        logger.info("EMG Decoder initialized")
     
-    def extract_classification_features(self, features_dict):
-        """Extract classification features from preprocessed EMG data.
+    def _initialize_classifiers(self):
+        """Initialize the requested classifiers."""
+        classifier_names = DECODING["classifiers"]
         
-        Args:
-            features_dict (dict): Dictionary of feature values from EMGProcessor
-            
-        Returns:
-            numpy.ndarray: Feature vector for classification
-        """
-        if not features_dict:
-            return np.array([])
-        
-        feature_vector = []
-        
-        # Collect requested features
-        for feature in self.feature_names:
-            if feature.lower() == "rms" and "rms" in features_dict:
-                feature_vector.extend(features_dict["rms"])
-            elif feature.lower() == "mav" and "mav" in features_dict:
-                feature_vector.extend(features_dict["mav"])
-            elif feature.lower() == "wl" and "wl" in features_dict:
-                feature_vector.extend(features_dict["wl"])
-            elif feature.lower() == "zc" and "zc" in features_dict:
-                feature_vector.extend(features_dict["zc"])
-            elif feature.lower() == "ssc" and "ssc" in features_dict:
-                feature_vector.extend(features_dict["ssc"])
-            elif feature.lower() == "ar" and "ar" in features_dict:
-                # AR coefficients are 2D, flatten them
-                ar_coeffs = features_dict["ar"]
-                feature_vector.extend(ar_coeffs.flatten())
-                
-        return np.array(feature_vector)
-    
-    def train(self, X, y, classifier_type=None):
-        """Train the EMG decoder with labeled data.
-        
-        Args:
-            X (numpy.ndarray): Feature vectors for training
-            y (numpy.ndarray or list): Class labels
-            classifier_type (str): Which classifier to train, or None for all
-            
-        Returns:
-            dict: Training results
-        """
-        if X is None or len(X) == 0 or y is None or len(y) == 0:
-            logger.error("Empty training data received")
-            return {"success": False, "error": "Empty training data"}
-            
-        results = {}
-        
-        # Select classifiers to train
-        clf_types = [classifier_type] if classifier_type else self.classifiers.keys()
-        
-        for clf_type in clf_types:
-            if clf_type not in self.classifiers:
-                logger.warning(f"Unknown classifier: {clf_type}")
-                results[clf_type] = {"success": False, "error": "Unknown classifier"}
-                continue
-                
-            try:
-                # Scale features if configured
-                if self.normalize:
-                    X_scaled = self.scalers[clf_type].fit_transform(X)
-                else:
-                    X_scaled = X
-                
-                # Split data
-                X_train, X_test, y_train, y_test = train_test_split(
-                    X_scaled, y, 
-                    train_size=self.training_ratio,
-                    random_state=42,
-                    stratify=y
+        for name in classifier_names:
+            if name == "kNN":
+                # k-Nearest Neighbors classifier
+                self.classifiers["kNN"] = KNeighborsClassifier(
+                    n_neighbors=5,
+                    weights='distance',
+                    metric='euclidean'
                 )
+                
+            elif name == "MLP":
+                # Multi-layer Perceptron (neural network)
+                self.classifiers["MLP"] = MLPClassifier(
+                    hidden_layer_sizes=(100, 50),
+                    activation='relu',
+                    solver='adam',
+                    alpha=0.0001,
+                    batch_size='auto',
+                    max_iter=500,
+                    random_state=42
+                )
+                
+        logger.info(f"Initialized classifiers: {list(self.classifiers.keys())}")
+    
+    def _extract_feature_vector(self, features):
+        """Extract and concatenate features into a single vector.
+        
+        Args:
+            features (dict): Dictionary of features from EMG processor
+            
+        Returns:
+            numpy.ndarray: Feature vector
+        """
+        if features is None:
+            return None
+            
+        feature_vectors = []
+        
+        # Add selected features to the vector
+        for feature_name in self.features_list:
+            if feature_name in features and features[feature_name] is not None:
+                feature_data = features[feature_name]
+                
+                # Reshape if necessary
+                if len(feature_data.shape) > 1:
+                    feature_data = feature_data.flatten()
+                    
+                feature_vectors.append(feature_data)
+                
+        # Concatenate all features into one vector
+        if feature_vectors:
+            return np.concatenate(feature_vectors)
+        else:
+            return None
+    
+    def train(self, training_data, training_labels):
+        """Train the classifiers on labeled EMG data.
+        
+        Args:
+            training_data (numpy.ndarray): Feature vectors for training
+            training_labels (numpy.ndarray): Class labels for training
+            
+        Returns:
+            dict: Training performance metrics
+        """
+        if training_data is None or training_labels is None:
+            logger.error("Cannot train with None data or labels")
+            return None
+            
+        if len(training_data) != len(training_labels):
+            logger.error(f"Data and label counts don't match: {len(training_data)} vs {len(training_labels)}")
+            return None
+            
+        try:
+            # Scale the data
+            X = self.scaler.fit_transform(training_data)
+            y = training_labels
+            
+            # Split data into training and validation sets
+            test_ratio = 1.0 - DECODING["training_ratio"]
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_ratio, random_state=42, stratify=y
+            )
+            
+            # Performance metrics
+            metrics = {}
+            
+            # Train each classifier
+            for name, clf in self.classifiers.items():
+                logger.info(f"Training {name} classifier...")
                 
                 # Train the classifier
-                self.classifiers[clf_type].fit(X_train, y_train)
+                clf.fit(X_train, y_train)
                 
                 # Evaluate on test set
-                y_pred = self.classifiers[clf_type].predict(X_test)
+                y_pred = clf.predict(X_test)
                 accuracy = accuracy_score(y_test, y_pred)
                 
-                # Cross-validation
+                # Get cross-validation score
                 cv_scores = cross_val_score(
-                    self.classifiers[clf_type], X_scaled, y, 
-                    cv=self.cv_folds
+                    clf, X, y, 
+                    cv=DECODING["cv_folds"], 
+                    scoring='accuracy'
                 )
                 
-                # Store results
-                results[clf_type] = {
-                    "success": True,
-                    "accuracy": accuracy,
-                    "cv_scores": cv_scores,
-                    "cv_mean": np.mean(cv_scores),
-                    "cv_std": np.std(cv_scores)
+                metrics[name] = {
+                    'accuracy': accuracy,
+                    'cv_accuracy_mean': cv_scores.mean(),
+                    'cv_accuracy_std': cv_scores.std()
                 }
+                
+                logger.info(f"{name} accuracy: {accuracy:.3f}, CV: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
                 
                 # Generate confusion matrix
                 cm = confusion_matrix(y_test, y_pred)
-                results[clf_type]["confusion_matrix"] = cm
-                
-                # Generate classification report
-                report = classification_report(y_test, y_pred, output_dict=True)
-                results[clf_type]["classification_report"] = report
-                
-                logger.info(f"{clf_type} classifier trained (accuracy: {accuracy:.3f})")
-                
-            except Exception as e:
-                logger.error(f"Error training {clf_type} classifier: {str(e)}")
-                results[clf_type] = {"success": False, "error": str(e)}
-        
-        # Overall status
-        success = all(r.get("success", False) for r in results.values())
-        if success:
-            self.trained = True
+                metrics[name]['confusion_matrix'] = cm
             
-        return results
+            self.is_trained = True
+            self._save_models()
+            
+            return metrics
+            
+        except Exception as e:
+            logger.error(f"Error training classifiers: {str(e)}")
+            return None
     
-    def predict(self, X, classifier_type=None, return_probabilities=False):
-        """Predict hand/finger movements from EMG features.
+    def classify(self, features, method="best"):
+        """Classify EMG features into a hand gesture.
         
         Args:
-            X (numpy.ndarray): Feature vector for classification
-            classifier_type (str): Which classifier to use, or None for voting
-            return_probabilities (bool): If True, return class probabilities
+            features (dict or numpy.ndarray): EMG features from EMGProcessor
+                                            or pre-extracted feature vector
+            method (str): Classification method - "best", "kNN", "MLP", or "ensemble"
             
         Returns:
-            tuple: (predicted_gesture, probabilities)
+            tuple: (gesture_id, gesture_name, confidence)
         """
-        if X is None or len(X) == 0:
-            return None, {}
-            
-        # Check if any classifiers are trained
-        if not self.trained:
-            logger.warning("No trained classifiers available for prediction")
-            return None, {}
-            
-        # Feature vector needs to be 2D for sklearn
-        if X.ndim == 1:
-            X = X.reshape(1, -1)
-            
-        # Select classifier to use
-        if classifier_type and classifier_type in self.classifiers:
-            clf_types = [classifier_type]
-        else:
-            # Use all available classifiers
-            clf_types = list(self.classifiers.keys())
-            
-        # Collect predictions from each classifier
-        predictions = {}
-        probabilities = {}
+        if not self.is_trained:
+            if not self._load_models():
+                logger.error("Cannot classify: No trained models available")
+                return None, "unknown", 0.0
         
-        for clf_type in clf_types:
-            # Skip untrained classifiers
-            if not hasattr(self.classifiers[clf_type], "classes_"):
-                continue
+        try:
+            # Extract features if dictionary is provided
+            if isinstance(features, dict):
+                feature_vector = self._extract_feature_vector(features)
+                if feature_vector is None:
+                    return None, "unknown", 0.0
+            else:
+                feature_vector = features
                 
-            try:
-                # Scale features
-                if self.normalize:
-                    X_scaled = self.scalers[clf_type].transform(X)
+            # Ensure feature vector is 2D for sklearn
+            if feature_vector.ndim == 1:
+                feature_vector = feature_vector.reshape(1, -1)
+                
+            # Scale the features
+            X = self.scaler.transform(feature_vector)
+            
+            # Classification result storage
+            results = {}
+            
+            # Select classification method
+            if method == "ensemble" or method == "best":
+                # Use all classifiers and average/vote
+                class_probabilities = np.zeros((1, len(self.gestures)))
+                
+                for name, clf in self.classifiers.items():
+                    if hasattr(clf, 'predict_proba'):
+                        # Get class probabilities if available
+                        proba = clf.predict_proba(X)
+                        class_probabilities += proba
+                    else:
+                        # Otherwise just add a vote for the predicted class
+                        y_pred = clf.predict(X)[0]
+                        class_probabilities[0, y_pred] += 1
+                        
+                # Normalize
+                class_probabilities /= len(self.classifiers)
+                
+                # Get prediction and confidence
+                prediction = np.argmax(class_probabilities)
+                confidence = class_probabilities[0, prediction]
+                
+            elif method in self.classifiers:
+                # Use a specific classifier
+                clf = self.classifiers[method]
+                prediction = clf.predict(X)[0]
+                
+                # Get confidence if available
+                if hasattr(clf, 'predict_proba'):
+                    confidence = clf.predict_proba(X)[0, prediction]
                 else:
-                    X_scaled = X
+                    # For methods without probability, use a default
+                    confidence = 1.0
                     
-                # Get prediction
-                pred = self.classifiers[clf_type].predict(X_scaled)
-                predictions[clf_type] = pred[0]
+            else:
+                logger.error(f"Unknown classification method: {method}")
+                return None, "unknown", 0.0
                 
-                # Get probabilities if requested and available
-                if return_probabilities and hasattr(self.classifiers[clf_type], "predict_proba"):
-                    probs = self.classifiers[clf_type].predict_proba(X_scaled)[0]
-                    prob_dict = {self.classifiers[clf_type].classes_[i]: probs[i] 
-                                for i in range(len(probs))}
-                    probabilities[clf_type] = prob_dict
-                    
-            except Exception as e:
-                logger.error(f"Error in {clf_type} prediction: {str(e)}")
-                predictions[clf_type] = None
-        
-        # Voting (simple majority)
-        if len(predictions) > 0:
-            from collections import Counter
-            votes = Counter(predictions.values())
-            final_prediction = votes.most_common(1)[0][0]
-        else:
-            final_prediction = None
+            # Get gesture name
+            gesture_name = self.gestures.get(prediction, "unknown")
             
-        return final_prediction, probabilities
+            # Return the prediction
+            return prediction, gesture_name, confidence
+            
+        except Exception as e:
+            logger.error(f"Error in classification: {str(e)}")
+            return None, "unknown", 0.0
     
-    def save_models(self, prefix=None):
-        """Save trained models to disk.
-        
-        Args:
-            prefix (str): Optional prefix for filenames
+    def _save_models(self):
+        """Save trained models to disk."""
+        if not self.is_trained:
+            logger.warning("Cannot save models: Models not trained")
+            return False
             
-        Returns:
-            dict: Paths to saved models
-        """
-        if not os.path.exists(self.model_dir):
-            os.makedirs(self.model_dir)
+        try:
+            # Generate timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
-        if prefix is None:
-            prefix = f"emg_decoder_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-        saved_paths = {}
-        
-        for clf_type, clf in self.classifiers.items():
-            # Skip untrained classifiers
-            if not hasattr(clf, "classes_"):
-                continue
-                
-            try:
-                # Save the classifier
-                model_path = os.path.join(self.model_dir, f"{prefix}_{clf_type}.pkl")
+            # Save each classifier
+            for name, clf in self.classifiers.items():
+                model_path = os.path.join(MODEL_DIR, f"emg_classifier_{name}_{timestamp}.joblib")
                 joblib.dump(clf, model_path)
+                logger.info(f"Saved {name} model to {model_path}")
                 
-                # Save the scaler
-                scaler_path = os.path.join(self.model_dir, f"{prefix}_{clf_type}_scaler.pkl")
-                joblib.dump(self.scalers[clf_type], scaler_path)
+            # Save the scaler
+            scaler_path = os.path.join(MODEL_DIR, f"emg_scaler_{timestamp}.joblib")
+            joblib.dump(self.scaler, scaler_path)
+            logger.info(f"Saved feature scaler to {scaler_path}")
+            
+            # Save a reference to the latest models
+            latest = {
+                "timestamp": timestamp,
+                "classifiers": {name: f"emg_classifier_{name}_{timestamp}.joblib" for name in self.classifiers},
+                "scaler": f"emg_scaler_{timestamp}.joblib"
+            }
+            
+            import json
+            latest_path = os.path.join(MODEL_DIR, "latest_models.json")
+            with open(latest_path, 'w') as f:
+                json.dump(latest, f, indent=2)
                 
-                saved_paths[clf_type] = {
-                    "model": model_path,
-                    "scaler": scaler_path
-                }
-                
-                logger.info(f"{clf_type} model saved to {model_path}")
-                
-            except Exception as e:
-                logger.error(f"Error saving {clf_type} model: {str(e)}")
-        
-        return saved_paths
+            logger.info("Saved model references to latest_models.json")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error saving models: {str(e)}")
+            return False
     
-    def load_models(self, paths):
+    def _load_models(self, timestamp=None):
         """Load trained models from disk.
         
         Args:
-            paths (dict): Dict with classifier types and file paths
+            timestamp (str, optional): Specific timestamp to load, or None for latest
             
         Returns:
-            bool: True if successful
+            bool: True if models loaded successfully
         """
-        for clf_type, path_dict in paths.items():
-            try:
-                # Load the classifier
-                model_path = path_dict.get("model")
-                if model_path and os.path.exists(model_path):
-                    self.classifiers[clf_type] = joblib.load(model_path)
-                    
-                # Load the scaler
-                scaler_path = path_dict.get("scaler")
-                if scaler_path and os.path.exists(scaler_path):
-                    self.scalers[clf_type] = joblib.load(scaler_path)
-                    
-                logger.info(f"{clf_type} model loaded from {model_path}")
+        try:
+            # If timestamp not specified, load latest
+            if timestamp is None:
+                # Try to read the latest models reference
+                import json
+                latest_path = os.path.join(MODEL_DIR, "latest_models.json")
                 
-            except Exception as e:
-                logger.error(f"Error loading {clf_type} model: {str(e)}")
+                if not os.path.exists(latest_path):
+                    logger.error("No saved models found")
+                    return False
+                    
+                with open(latest_path, 'r') as f:
+                    latest = json.load(f)
+                    
+                timestamp = latest.get("timestamp")
+                
+                if timestamp is None:
+                    logger.error("Invalid latest models reference")
+                    return False
+            
+            # Load classifiers
+            for name in self.classifiers.keys():
+                model_path = os.path.join(MODEL_DIR, f"emg_classifier_{name}_{timestamp}.joblib")
+                
+                if os.path.exists(model_path):
+                    self.classifiers[name] = joblib.load(model_path)
+                    logger.info(f"Loaded {name} model from {model_path}")
+                else:
+                    logger.error(f"Model file not found: {model_path}")
+                    return False
+            
+            # Load scaler
+            scaler_path = os.path.join(MODEL_DIR, f"emg_scaler_{timestamp}.joblib")
+            if os.path.exists(scaler_path):
+                self.scaler = joblib.load(scaler_path)
+                logger.info(f"Loaded feature scaler from {scaler_path}")
+            else:
+                logger.error(f"Scaler file not found: {scaler_path}")
                 return False
-        
-        self.trained = True
-        return True
+                
+            self.is_trained = True
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error loading models: {str(e)}")
+            return False
     
-    def generate_training_data_from_recordings(self, recordings_dir, out_file=None):
-        """Generate training data from recorded EMG sessions.
+    def collect_training_data(self, emg_processor, acquisition_time=2.0, rest_time=1.0):
+        """Interactive collection of training data for multiple gestures.
         
         Args:
-            recordings_dir (str): Directory with EMG recording files
-            out_file (str): Path to save the combined dataset
+            emg_processor (EMGProcessor): Processor for EMG data
+            acquisition_time (float): Time to record each gesture in seconds
+            rest_time (float): Rest time between gesture recordings
             
         Returns:
-            tuple: (X, y) feature matrix and labels
+            tuple: (feature_vectors, labels)
         """
-        if not os.path.exists(recordings_dir):
-            logger.error(f"Recordings directory not found: {recordings_dir}")
-            return None, None
+        try:
+            from emg_acquisition import SessantaquatroEMG
             
-        X_all = []
-        y_all = []
-        
-        # Find all h5 files in the directory
-        import glob
-        h5_files = glob.glob(os.path.join(recordings_dir, "*.h5"))
-        
-        for h5_file in h5_files:
-            try:
-                with h5py.File(h5_file, 'r') as f:
-                    # Check if this file has the required datasets
-                    if "features" not in f or "labels" not in f:
-                        logger.warning(f"Skip {h5_file}: missing features or labels")
-                        continue
-                        
-                    # Load the features and labels
-                    features = f["features"][:]
-                    labels = [s.decode('utf-8') for s in f["labels"][:]]
-                    
-                    X_all.append(features)
-                    y_all.extend(labels)
-                    
-            except Exception as e:
-                logger.error(f"Error loading {h5_file}: {str(e)}")
-        
-        if not X_all:
-            logger.error("No valid training data found")
-            return None, None
+            print("\nTraining data collection")
+            print("======================")
+            print(f"We'll collect {acquisition_time:.1f}s of data for each gesture.")
+            print("Follow the prompts to perform each gesture when requested.")
             
-        # Combine all features
-        X = np.vstack(X_all)
-        y = np.array(y_all)
-        
-        # Save the combined dataset if requested
-        if out_file:
-            try:
-                with h5py.File(out_file, 'w') as f:
-                    f.create_dataset("features", data=X)
-                    
-                    # Convert labels to ASCII strings
-                    labels_ascii = np.array([s.encode('ascii') for s in y])
-                    f.create_dataset("labels", data=labels_ascii, dtype='S100')
-                    
-                logger.info(f"Combined training data saved to {out_file}")
+            # Initialize EMG acquisition if not provided
+            emg = SessantaquatroEMG()
+            
+            # Storage for collected data
+            all_features = []
+            all_labels = []
+            
+            # Collect data for each gesture
+            for gesture_id, gesture_name in self.gestures.items():
+                print(f"\nPrepare to perform: {gesture_name} (ID: {gesture_id})")
+                print(f"Get ready... (3 seconds)")
+                time.sleep(3)
                 
-            except Exception as e:
-                logger.error(f"Error saving combined dataset: {str(e)}")
-        
-        return X, y
+                print(f"PERFORM THE GESTURE NOW! Recording for {acquisition_time:.1f} seconds...")
+                
+                # Generate simulated data for testing
+                # In a real application, this would be:
+                # 1. Start streaming from the EMG device
+                # 2. Collect a sequence of windows
+                # 3. Process each window and extract features
+                
+                # For each recording, collect multiple windows of data
+                num_windows = int(acquisition_time * 1.0)  # Approximate windows per second
+                for i in range(num_windows):
+                    # Get EMG data (or simulate)
+                    raw_data = emg.simulate_data(duration=0.5)  # 500ms windows
+                    
+                    # Process the data
+                    processed = emg_processor.preprocess(raw_data)
+                    
+                    # Extract features
+                    features = emg_processor.extract_features(processed)
+                    feature_vector = self._extract_feature_vector(features)
+                    
+                    # Save feature vector and label
+                    all_features.append(feature_vector)
+                    all_labels.append(gesture_id)
+                    
+                    # Brief pause between windows
+                    time.sleep(0.2)
+                
+                print("Done recording this gesture.")
+                print(f"Rest for {rest_time:.1f} seconds...")
+                time.sleep(rest_time)
+            
+            print("\nTraining data collection complete!")
+            print(f"Collected {len(all_features)} samples across {len(self.gestures)} gestures.")
+            
+            return np.array(all_features), np.array(all_labels)
+            
+        except Exception as e:
+            logger.error(f"Error collecting training data: {str(e)}")
+            print(f"Error: {str(e)}")
+            return None, None
     
-    def plot_confusion_matrix(self, cm, class_names=None):
-        """Plot the confusion matrix for visualization.
+    def plot_confusion_matrix(self, cm, gesture_labels=None, title='Confusion Matrix'):
+        """Plot a confusion matrix for classifier evaluation.
         
         Args:
             cm (numpy.ndarray): Confusion matrix
-            class_names (list): Class labels
+            gesture_labels (list, optional): Custom gesture labels
+            title (str): Plot title
         """
-        if class_names is None:
-            class_names = self.gesture_names[:len(cm)]
+        if gesture_labels is None:
+            gesture_labels = [self.gestures[i] for i in range(len(self.gestures))]
             
-        # Create figure
         plt.figure(figsize=(10, 8))
         plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
-        plt.title('Confusion Matrix')
+        plt.title(title)
         plt.colorbar()
         
-        # Add labels
-        tick_marks = np.arange(len(class_names))
-        plt.xticks(tick_marks, class_names, rotation=45, ha="right")
-        plt.yticks(tick_marks, class_names)
+        tick_marks = np.arange(len(gesture_labels))
+        plt.xticks(tick_marks, gesture_labels, rotation=45, ha='right')
+        plt.yticks(tick_marks, gesture_labels)
         
-        # Add values inside cells
-        thresh = cm.max() / 2.
+        # Add text annotations
+        thresh = cm.max() / 2.0
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 plt.text(j, i, format(cm[i, j], 'd'),
-                        ha="center", va="center",
-                        color="white" if cm[i, j] > thresh else "black")
-        
+                         ha="center", va="center",
+                         color="white" if cm[i, j] > thresh else "black")
+                
         plt.tight_layout()
         plt.ylabel('True Gesture')
         plt.xlabel('Predicted Gesture')
+        
+        # Save the plot
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(MODEL_DIR, f"confusion_matrix_{timestamp}.png")
+        plt.savefig(filename, dpi=150)
+        logger.info(f"Saved confusion matrix to {filename}")
+        
         plt.show()
 
 
 if __name__ == "__main__":
-    # Simple test script
+    # Test script for EMG decoder
+    from emg_acquisition import SessantaquatroEMG
+    from emg_processing import EMGProcessor
     
-    # Create synthetic training data
-    n_samples = 500
-    n_features = 64 * 4  # 4 features per channel with 64 channels
+    print("Testing EMG decoder...")
     
-    # Create random feature vectors
-    X = np.random.rand(n_samples, n_features)
-    
-    # Use a subset of gesture names
-    gesture_subset = ["thumb_flexion", "index_flexion", "middle_flexion", 
-                     "ring_little_flexion", "power_grip", "rest"]
-    
-    # Create random labels
-    y = np.random.choice(gesture_subset, size=n_samples)
-    
-    # Create and train the decoder
+    # Create required objects
+    emg = SessantaquatroEMG()
+    processor = EMGProcessor()
     decoder = EMGDecoder()
     
-    results = decoder.train(X, y)
+    # Generate some simulated data
+    print("\nGenerating simulated EMG data...")
+    raw_data = emg.simulate_data(duration=1.0)
     
-    for clf_type, result in results.items():
-        if result["success"]:
-            print(f"{clf_type} accuracy: {result['accuracy']:.3f}")
-            print(f"{clf_type} cross-validation mean: {result['cv_mean']:.3f} ± {result['cv_std']:.3f}")
-            
-            # Plot confusion matrix
-            decoder.plot_confusion_matrix(result["confusion_matrix"], gesture_subset)
+    # Process the data
+    processed = processor.preprocess(raw_data)
     
-    # Test prediction
-    test_sample = np.random.rand(1, n_features)
-    prediction, probs = decoder.predict(test_sample[0], return_probabilities=True)
+    # Extract features
+    features = processor.extract_features(processed)
     
-    print(f"Predicted gesture: {prediction}")
+    # Test classification (will likely return "unknown" because model isn't trained)
+    print("\nTesting classification with untrained model...")
+    gesture_id, gesture_name, confidence = decoder.classify(features)
+    print(f"Classification: {gesture_name} (ID: {gesture_id}) with {confidence:.2f} confidence")
     
-    # Save models
-    decoder.save_models("test_model")
+    # Simulated training data collection
+    print("\nSimulating training data collection...")
+    # Generate some dummy training data (in reality would use collect_training_data())
+    n_samples = 100
+    n_features = len(decoder._extract_feature_vector(features))
+    X_train = np.random.rand(n_samples, n_features)
+    y_train = np.random.randint(0, len(decoder.gestures), n_samples)
+    
+    # Train the classifiers
+    print("\nTraining classifiers...")
+    metrics = decoder.train(X_train, y_train)
+    
+    if metrics:
+        print("\nTraining results:")
+        for clf_name, results in metrics.items():
+            print(f"- {clf_name}: Accuracy = {results['accuracy']:.3f}, " +
+                 f"CV = {results['cv_accuracy_mean']:.3f} ± {results['cv_accuracy_std']:.3f}")
+    
+    # Test classification again with trained model
+    print("\nTesting classification with trained model...")
+    test_features = np.random.rand(1, n_features)
+    gesture_id, gesture_name, confidence = decoder.classify(test_features)
+    print(f"Classification: {gesture_name} (ID: {gesture_id}) with {confidence:.2f} confidence")

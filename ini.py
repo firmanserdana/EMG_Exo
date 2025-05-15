@@ -2,92 +2,129 @@
 # -*- coding: utf-8 -*-
 
 """
-Initialization file for EMG Exoskeleton Control System.
-Contains configuration parameters for the application.
+Configuration settings for the EMG processing application.
 """
 
 import os
 import logging
+import sys
 from datetime import datetime
 
 # Setup logging
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=os.path.join(LOG_DIR, f"emg_exo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-)
-logger = logging.getLogger("EMG_Exo")
+logger = logging.getLogger('EMGExo')
+logger.setLevel(logging.INFO)
 
-# Sessantaquatro board configuration
+# Create handlers
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO)
+
+# Create log directory if it doesn't exist
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
+# Create file handler for logging
+log_file = os.path.join(log_dir, f'emg_exo_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+
+# Create formatter and add it to handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+# Add handlers to logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+# Paths for saving data
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+MODEL_DIR = os.path.join(BASE_DIR, 'models')
+
+# Ensure directories exist
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# EMG board configuration
 EMG_CONFIG = {
-    "device_name": "Sessantaquatro",
+    "port": "COM3",  # Default COM port for Windows
+    "baudrate": 115200,
     "sampling_rate": 2048,  # Hz
-    "channels": 64,  # Number of EMG channels
-    "port": "COM3",  # Default port, can be changed by the user
-    "baudrate": 2000000,
+    "channels": 64,  # Sessantaquatro board has 64 channels
     "resolution": 24,  # bits
+    "reference": "monopolar"
 }
 
-# EMG Processing parameters
+# EMG processing configuration
 EMG_PROCESSING = {
-    "window_size": 256,  # samples
-    "window_overlap": 128,  # samples
-    "bandpass_low": 10,  # Hz
-    "bandpass_high": 500,  # Hz
-    "notch_freq": 50,  # Hz (power line interference)
-    "decomposition_method": "FastICA"  # Options: "FastICA", "CKC", "PCA"
+    "window_size": 1024,  # samples
+    "window_overlap": 512,  # samples
+    "bandpass_low": 10.0,  # Hz
+    "bandpass_high": 500.0,  # Hz
+    "notch_freq": 50.0,  # Hz (for power line interference)
+    "decomposition_method": "FastICA"  # Options: "FastICA", "PCA", "CKC"
 }
 
-# Recording parameters
+# Recording configuration
 RECORDING = {
+    "save_dir": os.path.join(DATA_DIR, "recordings"),
     "save_raw_emg": True,
     "save_processed_emg": True,
-    "save_decomposed_mus": True,
-    "save_dir": os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
-    "file_format": "hdf5"  # Options: "hdf5", "csv", "mat"
+    "save_decomposed_mus": True
 }
 
-# Decoding parameters
+# Machine learning / decoder configuration
 DECODING = {
     "classifiers": ["kNN", "MLP"],
     "features": ["RMS", "MAV", "WL", "ZC", "SSC", "AR"],
-    "training_ratio": 0.7,
-    "cv_folds": 5,
-    "normalize": True,
+    "training_ratio": 0.7,  # 70% training, 30% testing
+    "cv_folds": 5,  # Cross-validation folds
+    "normalize": True  # Standardize features
 }
 
-# Unity hand control parameters
+# Unity hand control configuration
 HAND_CONTROL = {
-    "ip_address": "127.0.0.1",
+    "ip_address": "127.0.0.1",  # localhost
     "port": 9000,
-    "protocol": "UDP",
-    "update_rate": 50,  # Hz
-    "command_delay": 0.02,  # seconds
+    "protocol": "UDP",  # Options: "UDP", "TCP"
+    "update_rate": 30,  # Updates per second
+    "command_delay": 0.01  # Seconds between commands
 }
 
-# Degree of Freedom (DoF) configuration for the glove
+# Degrees of Freedom configuration
 DOF_CONFIG = {
     "thumb": ["flexion", "extension", "pinching"],
     "index": ["flexion", "extension", "pinching"],
     "middle": ["flexion", "extension", "pinching"],
     "ring_little": ["flexion", "extension"],
-    "thumb_abduction": True,
-    "total_dofs": 12
+    "thumb_abduction": True
 }
 
-# Create necessary directories
-DATA_DIR = RECORDING["save_dir"]
-MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-logger.info("Initialization complete. Application ready to start.")
-
+# If this file is run directly, print configuration
 if __name__ == "__main__":
-    print("EMG Exoskeleton Control System - Configuration Loaded")
-    print(f"EMG Device: {EMG_CONFIG['device_name']}")
-    print(f"Sampling Rate: {EMG_CONFIG['sampling_rate']} Hz")
-    print(f"Total DoFs: {DOF_CONFIG['total_dofs']}")
-    print(f"Log file: {os.path.join(LOG_DIR, f'emg_exo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log')}")
+    print("EMG Exo Application Configuration")
+    print("=================================")
+    
+    print("\nEMG Configuration:")
+    for key, value in EMG_CONFIG.items():
+        print(f"  {key}: {value}")
+        
+    print("\nProcessing Configuration:")
+    for key, value in EMG_PROCESSING.items():
+        print(f"  {key}: {value}")
+        
+    print("\nHand DoF Configuration:")
+    for key, value in DOF_CONFIG.items():
+        print(f"  {key}: {value}")
+        
+    print("\nRecording Configuration:")
+    for key, value in RECORDING.items():
+        print(f"  {key}: {value}")
+        
+    print("\nDecoding Configuration:")
+    for key, value in DECODING.items():
+        print(f"  {key}: {value}")
+        
+    print("\nHand Control Configuration:")
+    for key, value in HAND_CONTROL.items():
+        print(f"  {key}: {value}")
