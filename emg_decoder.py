@@ -84,6 +84,17 @@ class EMGDecoder:
                 
         logger.info(f"Initialized classifiers: {list(self.classifiers.keys())}")
     
+    def extract_classification_features(self, features):
+        """Extracts a feature vector from the feature dictionary for classification.
+        
+        Args:
+            features (dict): Dictionary containing features
+            
+        Returns:
+            numpy.ndarray: Feature vector for classification
+        """
+        return self._extract_feature_vector(features)
+    
     def _extract_feature_vector(self, features):
         """Extract and concatenate features into a single vector.
         

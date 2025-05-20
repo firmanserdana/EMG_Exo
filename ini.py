@@ -62,6 +62,13 @@ EMG_PROCESSING = {
     "bandpass_low": 10.0,  # Hz
     "bandpass_high": 500.0,  # Hz
     "notch_freq": 50.0,  # Hz (for power line interference)
+    "notch_quality": 30.0,  # Quality factor for notch filter
+    "highpass_cutoff": 20.0,  # Hz
+    "lowpass_cutoff": 450.0,  # Hz
+    "buffer_time": 5.0,  # seconds
+    "feature_window": 0.25,  # seconds
+    "feature_overlap": 0.5,  # ratio of overlap
+    "features_enabled": ["rms", "mav", "zc", "ssc", "wl", "var", "freq_mean", "freq_median", "freq_power"],
     "decomposition_method": "FastICA"  # Options: "FastICA", "PCA", "CKC"
 }
 
