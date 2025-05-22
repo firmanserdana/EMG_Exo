@@ -37,15 +37,34 @@ This application consists of three main components:
   - Gesture recognition display
   - Interactive controls for gesture simulation
 
+## Project Structure
+
+The project is organized as a Python package with the following structure:
+
+```
+emg_exo/
+├── __init__.py
+├── apps/                  # Application entry points
+├── config/                # Configuration management
+├── core/                  # Core functionality
+│   ├── acquisition/       # EMG system interfaces
+│   ├── decoder/           # Gesture classification
+│   ├── interface/         # Exoskeleton control
+│   ├── processing/        # Signal processing
+│   └── utils/             # Utility functions
+├── docs/                  # Documentation
+└── tests/                 # Unit tests
+```
+
 ## Getting Started
 
 ### Quick Start
 
 1. Clone the repository
-2. Install dependencies: `pip install -r requirements.txt`
-3. Run the demo: `python simple_demo.py`
+2. Install the package: `pip install -e .`
+3. Run the demo: `emg-demo`
 
-See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions.
+See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions and [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for transitioning from the old structure.
 
 ### Documentation
 
@@ -55,52 +74,79 @@ See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions.
 ## Prerequisites
 
 - Python 3.8 or higher
-- Required Python packages (see `requirements.txt`)
 - Optional: Sessantaquatro EMG board for hardware-based acquisition
+- Optional: Delsys Trigno EMG system for wireless EMG acquisition
+- Optional: Unity for 3D hand visualization
 
 ## Installation
 
 1. Clone this repository:
-```
+```bash
 git clone https://github.com/yourusername/EMG_Exo.git
 cd EMG_Exo
 ```
 
-2. Install Python dependencies:
-```
-pip install -r requirements.txt
+2. Install the package:
+```bash
+pip install -e .
 ```
 
 3. Open the Unity project located in the `Unity` folder using Unity Hub
 
 ## Usage
 
-### Python Backend
+### Command-Line Applications
 
-#### Running the Application
+The package provides several command-line entry points:
 
-The main application can be run in different modes and with different EMG systems:
+```bash
+# Run the main EMG exoskeleton application
+emg-exo
 
-##### Using the Sessantaquatro EMG Board
+# Run the EMG exoskeleton application with Trigno system
+emg-exo --emg trigno
 
-1. **Normal Mode** - Processes EMG signals and controls the Unity hand:
-```
-python main.py --emg-system sessantaquatro --port COMx
-```
+# Run the training mode
+emg-train
 
-2. **Training Mode** - Collects labeled EMG data for classifier training:
-```
-python main.py --train --emg-system sessantaquatro --port COMx
-```
-
-3. **Recording Mode** - Records raw EMG data for later analysis:
-```
-python main.py --record --emg-system sessantaquatro --port COMx
+# Run a simple demo
+emg-demo
 ```
 
-4. **Decomposition Mode** - Enables motor unit decomposition:
-```
-python main.py --decompose --emg-system sessantaquatro --port COMx
+### Python API
+
+The system can also be used as a Python library:
+
+```python
+from emg_exo.core.acquisition import create_emg_system
+from emg_exo.core.processing import EMGProcessor
+from emg_exo.core.decoder import EMGDecoder
+from emg_exo.core.interface import UnityHandInterface
+
+# Create components
+emg = create_emg_system("sessantaquatro")
+processor = EMGProcessor()
+decoder = EMGDecoder()
+interface = UnityHandInterface()
+
+# Connect to hardware
+emg.connect()
+interface.connect()
+
+# Main loop
+while True:
+    # Get EMG data
+    emg_data = emg.read()
+    
+    # Process data
+    processed_data = processor.preprocess(emg_data)
+    features = processor.extract_features(processed_data)
+    
+    # Decode gesture
+    gesture_id, gesture_name, confidence = decoder.classify(features)
+    
+    # Send to interface
+    interface.send_gesture_info(gesture_id, gesture_name, confidence)
 ```
 
 Replace `COMx` with your actual COM port where the Sessantaquatro board is connected.
@@ -208,22 +254,52 @@ The Unity communication is handled through a network socket (UDP/TCP) interface 
 - Provides a high-level gesture mapping API
 - Includes error recovery mechanisms for connection issues
 
-## Project Structure
+## Detailed Project Structure
 
 ```
 EMG_Exo/
-├── emg_acquisition.py      # Sessantaquatro board interface
-├── emg_processing.py       # Signal processing and MU decomposition
-├── emg_decoder.py          # ML-based gesture classification
-├── unity_hand_interface.py # Unity communication interface
-├── main.py                 # Main application entry point
-├── ini.py                  # Configuration settings
-├── requirements.txt        # Python dependencies
-├── Unity/                  # Unity project folder
-│   ├── Scripts/            # C# scripts for Unity
-│   ├── Prefabs/            # Unity prefabs
-│   └── Materials/          # Materials for the 3D hand
-└── data/                   # Created at runtime for storing recordings
+├── emg_exo/                      # Main package
+│   ├── __init__.py               # Package initialization
+│   ├── apps/                     # Application entry points
+│   │   ├── __init__.py
+│   │   └── main_app.py           # Main application
+│   ├── config/                   # Configuration management
+│   │   ├── __init__.py
+│   │   ├── config.py             # Configuration loading
+│   │   └── default_config.json   # Default settings
+│   ├── core/                     # Core functionality
+│   │   ├── __init__.py
+│   │   ├── acquisition/          # EMG systems
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py           # Base EMG system
+│   │   │   ├── factory.py        # EMG system factory
+│   │   │   ├── sessantaquatro.py # Sessantaquatro board
+│   │   │   └── trigno.py         # Delsys Trigno system
+│   │   ├── decoder/              # Gesture recognition
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py           # Base decoder
+│   │   │   └── decoder.py        # EMG decoder
+│   │   ├── interface/            # Output interfaces
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py           # Base interface
+│   │   │   └── unity.py          # Unity interface
+│   │   ├── processing/           # Signal processing
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py           # Base processor
+│   │   │   └── processor.py      # EMG processor
+│   │   └── utils/                # Utilities
+│   │       ├── __init__.py
+│   │       └── utils.py          # Utility functions
+│   ├── docs/                     # Documentation
+│   └── tests/                    # Unit tests
+├── requirements.txt              # Python dependencies
+├── setup.py                      # Package setup
+├── MIGRATION_GUIDE.md            # Migration guide
+├── Unity/                        # Unity project folder
+│   ├── Scripts/                  # C# scripts for Unity
+│   ├── Prefabs/                  # Unity prefabs
+│   └── Materials/                # Materials for the 3D hand
+└── data/                         # Created at runtime for storing recordings
 ```
 
 ## References
