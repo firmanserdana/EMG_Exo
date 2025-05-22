@@ -1,34 +1,59 @@
 # EMG-Based Hand Control System
 
-A comprehensive system for processing EMG signals from the Sessantaquatro board, performing motor unit decomposition, interpreting hand gestures with machine learning, and controlling a 3D Unity hand model.
+A comprehensive system for processing EMG signals, interpreting hand gestures with machine learning, and visualizing results with real-time feedback. The system supports both hardware-based acquisition with the Sessantaquatro board and simulation mode for development and demonstrations without hardware.
+
+![EMG Visualization Demo](https://via.placeholder.com/800x400?text=EMG+Visualization+Demo)
 
 ## System Overview
 
-This application consists of two main components:
-1. **Python Backend**: Captures and processes EMG signals, performs motor unit decomposition, and translates them into hand movement commands
-2. **Unity Frontend**: A 3D visualization system with a hand model that receives commands from the Python backend
+This application consists of three main components:
+
+1. **EMG Acquisition**: Captures EMG signals from the Sessantaquatro board or generates simulated signals
+2. **Signal Processing & Recognition**: Processes EMG signals, extracts features, and classifies gestures
+3. **Visualization**: Real-time visualization of EMG signals and recognized gestures
 
 ## Features
 
-- Acquisition of EMG signals from the Sessantaquatro board (64 channels)
-- Advanced signal processing pipeline with filtering and feature extraction
-- Motor unit decomposition to extract individual motor unit firings
-- Machine learning-based gesture recognition using kNN and MLP classifiers
-- Control of a 12 DoF 3D hand model in Unity:
-  - Thumb, index and middle finger with 3 DoF each (flexion, extension, pinching)
-  - Ring and little finger with shared 2 DoF (flexion, extension)
-  - Thumb abduction as an additional DoF
+- **Hardware or Simulation**: Use real Sessantaquatro EMG hardware or realistic signal simulation
+- **Advanced Signal Processing**:
+  - Digital filtering (high-pass, low-pass, notch)
+  - Feature extraction (time and frequency domain)
+  - Signal envelope calculation
+  - Muscle activity detection
+- **Machine Learning-Based Gesture Recognition**:
+  - Multiple classifier support (kNN and MLP)
+  - Automated model training and evaluation
+  - Real-time classification
+- **Gesture Support**:
+  - Thumb, index, and middle finger control (flexion, extension, pinching)
+  - Ring and little finger control (flexion, extension)
+  - Thumb abduction
+  - Customizable gesture set
+- **Visualization**:
+  - Real-time signal plotting
+  - Gesture recognition display
+  - Interactive controls for gesture simulation
+
+## Getting Started
+
+### Quick Start
+
+1. Clone the repository
+2. Install dependencies: `pip install -r requirements.txt`
+3. Run the demo: `python simple_demo.py`
+
+See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions.
+
+### Documentation
+
+- [API Documentation](API_DOCUMENTATION.md): Complete API reference
+- [Tutorial](TUTORIAL.md): Step-by-step guide to using the system
 
 ## Prerequisites
 
-### Python Backend
 - Python 3.8 or higher
 - Required Python packages (see `requirements.txt`)
-- Access to a Sessantaquatro EMG board
-
-### Unity Frontend
-- Unity 2020.3 or higher
-- Basic understanding of Unity's UI and GameObject system
+- Optional: Sessantaquatro EMG board for hardware-based acquisition
 
 ## Installation
 

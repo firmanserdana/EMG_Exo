@@ -360,32 +360,75 @@ class SessantaquatroEMG:
             logger.error(f"Error getting EMG data: {str(e)}")
             return None
 
-    def simulate_data(self, duration=1.0):
+    def simulate_data(self, duration=1.0, gesture=None):
         """Generate simulated EMG data for testing.
         
         Args:
             duration (float): Duration of data in seconds
+            gesture (str, optional): Specific gesture to simulate
             
         Returns:
             numpy.ndarray: Simulated EMG data array with shape (channels, samples)
         """
         samples = int(duration * self.sampling_rate)
-        emg_data = np.random.normal(0, 50, (self.channels, samples))
+        emg_data = np.random.normal(0, 20, (self.channels, samples))
         
-        # Add synthetic EMG bursts to some channels
-        for burst in range(5):
-            ch = np.random.randint(0, self.channels)
-            start = np.random.randint(0, samples - 200)
-            end = start + 200
-            
-            # Generate a burst envelope
-            envelope = np.hanning(end - start)
-            
-            # Apply envelope to random noise for realistic EMG
-            burst_data = np.random.normal(0, 500, end - start) * envelope
-            
-            # Add burst to channel
-            emg_data[ch, start:end] += burst_data
+        # Define gesture patterns
+        gesture_patterns = {
+            "rest": [],
+            "thumb_flexion": [0, 1],
+            "index_flexion": [2, 3],
+            "middle_flexion": [4, 5],
+            "ring_little_flexion": [6, 7],
+            "thumb_extension": [0],
+            "index_extension": [2],
+            "middle_extension": [4],
+            "thumb_pinch": [0, 2],
+            "index_pinch": [2, 4],
+            "middle_pinch": [4, 6]
+        }
+        
+        # If a specific gesture is requested, activate those channels
+        if gesture and gesture in gesture_patterns:
+            active_channels = gesture_patterns[gesture]
+            # Add stronger activity to channels for this gesture
+            for ch in active_channels:
+                if ch < self.channels:  # Make sure channel exists
+                    # Generate a physiological EMG pattern
+                    time_points = np.linspace(0, duration, samples)
+                    
+                    # Base frequency components (50-100Hz for EMG)
+                    base_freq = 60 + ch * 5
+                    signal = np.sin(2 * np.pi * base_freq * time_points)
+                    signal += 0.5 * np.sin(2 * np.pi * base_freq * 2 * time_points)
+                    signal += 0.3 * np.sin(2 * np.pi * base_freq * 3 * time_points)
+                    
+                    # Apply amplitude modulation for muscle contraction pattern
+                    envelope = np.ones(samples)
+                    ramp_samples = int(0.1 * samples)
+                    envelope[:ramp_samples] = np.linspace(0, 1, ramp_samples)
+                    envelope[-ramp_samples:] = np.linspace(1, 0, ramp_samples)
+                    
+                    # Apply envelope to signal
+                    signal *= 400 * envelope
+                    
+                    # Add to channel data
+                    emg_data[ch] += signal
+        else:
+            # Add synthetic EMG bursts to random channels
+            for burst in range(min(5, self.channels)):
+                ch = np.random.randint(0, self.channels)
+                start = np.random.randint(0, samples - 200)
+                end = start + 200
+                
+                # Generate a burst envelope
+                envelope = np.hanning(end - start)
+                
+                # Apply envelope to random noise for realistic EMG
+                burst_data = np.random.normal(0, 500, end - start) * envelope
+                
+                # Add burst to channel
+                emg_data[ch, start:end] += burst_data
             
         logger.debug(f"Generated {duration}s of simulated EMG data")
         return emg_data

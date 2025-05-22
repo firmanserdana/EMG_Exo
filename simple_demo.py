@@ -13,8 +13,13 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.widgets import Button
 import logging
+import argparse
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
+
+# Import our custom modules
+from data_recorder import EMGDataRecorder
+from emg_visualizer import EMGVisualizer
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO, 
@@ -320,12 +325,14 @@ class GestureRecognizer:
 class EMGDemo:
     """Demo application for EMG signal processing and gesture recognition."""
     
-    def __init__(self, channel_count=8, auto_train=True):
+    def __init__(self, channel_count=8, auto_train=True, enable_recording=True, enhanced_viz=False):
         """Initialize demo application.
         
         Args:
             channel_count (int): Number of EMG channels
             auto_train (bool): Whether to automatically train the model
+            enable_recording (bool): Whether to enable data recording
+            enhanced_viz (bool): Whether to use enhanced visualization
         """
         # Create component instances
         self.emg = EMGSimulator(channel_count=channel_count)
@@ -340,6 +347,18 @@ class EMGDemo:
         # Auto training
         self.auto_train = auto_train
         
+        # Data recording
+        self.enable_recording = enable_recording
+        self.recorder = None
+        if enable_recording:
+            self.recorder = EMGDataRecorder(data_dir="emg_recordings")
+            
+        # Visualization options
+        self.enhanced_viz = enhanced_viz
+        self.visualizer = None
+        if enhanced_viz:
+            self.visualizer = EMGVisualizer(channel_count=channel_count)
+        
         logger.info("EMG Demo initialized")
         
     def start(self):
@@ -348,11 +367,48 @@ class EMGDemo:
         if self.auto_train:
             self._train_model()
         
+        # Start recording if enabled
+        if self.enable_recording and self.recorder:
+            session_info = {
+                "description": "EMG simple demo recording",
+                "channel_count": self.emg.channel_count,
+                "sampling_rate": self.emg.sampling_rate
+            }
+            success = self.recorder.start_recording(
+                sampling_rate=self.emg.sampling_rate,
+                session_info=session_info
+            )
+            if success:
+                logger.info("Data recording started")
+            else:
+                logger.warning("Failed to start data recording")
+        
         # Set up the visualization
-        self._setup_visualization()
-        plt.show()
+        if self.enhanced_viz and self.visualizer:
+            # Use enhanced visualization
+            self.visualizer.setup()
+            self.visualizer.start_animation(interval=50)
+            self.visualizer.show()
+        else:
+            # Use standard visualization
+            self._setup_visualization()
+            plt.show()
         
         logger.info("Demo started")
+        
+    def stop(self):
+        """Stop the demo application and clean up resources."""
+        # Stop recording if active
+        if self.enable_recording and self.recorder and self.recorder.recording:
+            saved_path = self.recorder.stop_recording()
+            if saved_path:
+                logger.info(f"Saved recording to {saved_path}")
+                
+        # Close visualizer if using enhanced mode
+        if self.enhanced_viz and self.visualizer:
+            self.visualizer.close()
+            
+        logger.info("Demo stopped")
         
     def _setup_visualization(self):
         """Set up the visualization figures."""
@@ -411,6 +467,19 @@ class EMGDemo:
         self.button_axes.append(train_button_ax)
         self.buttons.append(train_button)
         
+        # Add recording control buttons if recording is enabled
+        if self.enable_recording and self.recorder:
+            record_button_ax = plt.axes([0.6, 0.02, 0.15, 0.05])
+            record_button = Button(record_button_ax, 'Start Recording')
+            record_button.on_clicked(lambda event: self._toggle_recording())
+            
+            export_button_ax = plt.axes([0.4, 0.02, 0.15, 0.05])
+            export_button = Button(export_button_ax, 'Export Data')
+            export_button.on_clicked(lambda event: self._export_data())
+            
+            self.button_axes.extend([record_button_ax, export_button_ax])
+            self.buttons.extend([record_button, export_button])
+        
         # Animation
         self.anim = animation.FuncAnimation(self.fig, self._update_plot, 
                                           interval=50, blit=True)
@@ -423,7 +492,15 @@ class EMGDemo:
         # Process the data
         self.processor.add_samples(emg_data)
         
-        # Update plots
+        # If using the enhanced visualizer, update it
+        if self.enhanced_viz and self.visualizer:
+            # Add data to the visualizer
+            self.visualizer.add_data(emg_data)
+            
+            # We'll skip the rest of this method since the visualizer handles updates
+            return []
+        
+        # Standard visualization update
         updated_artists = []
         
         # Update EMG signal plots
@@ -462,6 +539,10 @@ class EMGDemo:
                         f"Gesture: {gesture_name.replace('_', ' ').title()}\n"
                         f"Confidence: {confidence:.2f}"
                     )
+                    
+                    # If recording is enabled, record this data with the detected gesture
+                    if self.enable_recording and self.recorder and self.recorder.recording:
+                        self.recorder.add_data(emg_data, features, gesture_name)
         
         updated_artists.append(self.gesture_text)
         return updated_artists
@@ -469,6 +550,71 @@ class EMGDemo:
     def _set_gesture(self, gesture_name):
         """Set the current gesture for simulation."""
         self.emg.set_gesture(gesture_name)
+    
+    def _toggle_recording(self):
+        """Toggle recording on/off."""
+        if not self.enable_recording or not self.recorder:
+            logger.error("Recording is not enabled")
+            return
+            
+        if self.recorder.recording:
+            # Stop recording
+            saved_path = self.recorder.stop_recording()
+            if saved_path:
+                logger.info(f"Stopped recording. Data saved to {saved_path}")
+                
+                # Update gesture text to show recording stopped
+                if not self.enhanced_viz:
+                    self.gesture_text.set_text("Recording stopped\nData saved")
+                else:
+                    self.visualizer.set_status_message("Recording stopped. Data saved.", duration=5.0)
+        else:
+            # Start recording
+            session_info = {
+                "description": "EMG gesture recording",
+                "channel_count": self.emg.channel_count,
+                "sampling_rate": self.emg.sampling_rate,
+                "current_time": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            success = self.recorder.start_recording(
+                sampling_rate=self.emg.sampling_rate,
+                session_info=session_info
+            )
+            
+            if success:
+                logger.info("Started recording")
+                # Update gesture text to show recording started
+                if not self.enhanced_viz:
+                    self.gesture_text.set_text("Recording started")
+                else:
+                    self.visualizer.set_status_message("Recording started", duration=3.0)
+            else:
+                logger.error("Failed to start recording")
+    
+    def _export_data(self):
+        """Export recorded data to MATLAB format."""
+        if not self.enable_recording or not self.recorder:
+            logger.error("Recording is not enabled")
+            return
+            
+        if self.recorder.recording:
+            logger.warning("Please stop recording before exporting data")
+            message = "Stop recording first"
+        else:
+            exported_path = self.recorder.export_to_matlab()
+            if exported_path:
+                logger.info(f"Data exported to {exported_path}")
+                message = f"Data exported"
+            else:
+                logger.error("Failed to export data")
+                message = "Export failed"
+                
+        # Show message
+        if not self.enhanced_viz:
+            self.gesture_text.set_text(message)
+        else:
+            self.visualizer.set_status_message(message, duration=3.0)
     
     def _train_model(self):
         """Train the gesture recognition model with simulated data."""
@@ -540,11 +686,34 @@ class EMGDemo:
 
 def main():
     """Main entry point for the demo application."""
-    # Create demo application
-    demo = EMGDemo(channel_count=8, auto_train=True)
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Simple EMG Gesture Recognition Demo")
+    parser.add_argument("--channels", type=int, default=8, 
+                      help="Number of EMG channels to simulate (default: 8)")
+    parser.add_argument("--no-train", action="store_true",
+                      help="Disable automatic model training")
+    parser.add_argument("--no-record", action="store_true",
+                      help="Disable data recording")
+    parser.add_argument("--enhanced-viz", action="store_true",
+                      help="Use enhanced visualization")
+    args = parser.parse_args()
     
-    # Start the demo
-    demo.start()
+    # Create demo application
+    demo = EMGDemo(
+        channel_count=args.channels, 
+        auto_train=not args.no_train,
+        enable_recording=not args.no_record,
+        enhanced_viz=args.enhanced_viz
+    )
+    
+    try:
+        # Start the demo
+        demo.start()
+    except KeyboardInterrupt:
+        print("\nExiting demo...")
+    finally:
+        # Ensure resources are cleaned up
+        demo.stop()
     
     return 0
 

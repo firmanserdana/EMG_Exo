@@ -587,6 +587,28 @@ class EMGProcessor:
                 time.sleep(0.1)
         
         logging.info("EMG background worker stopped")
+    
+    def preprocess(self, data):
+        """Preprocess raw EMG data.
+        
+        Args:
+            data (numpy.ndarray): Raw EMG data with shape (samples, channels) or (channels, samples)
+                
+        Returns:
+            numpy.ndarray: Processed EMG data with shape (samples, channels)
+        """
+        # Convert to numpy array if not already
+        data = np.asarray(data)
+        
+        # Check if data is in (channels, samples) format and transpose if needed
+        if data.shape[0] == self.channel_count and data.shape[1] > data.shape[0]:
+            data = data.T  # Transpose to (samples, channels)
+        
+        # Add the samples to our buffers and process them
+        processed = self.add_samples(data)
+        
+        # Convert processed data to numpy array and return
+        return np.array(processed).T  # Return in (samples, channels) format
 
 
 if __name__ == "__main__":

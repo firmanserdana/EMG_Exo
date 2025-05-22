@@ -59,6 +59,8 @@ class EMGDemo:
         self.current_gesture = None
         self.gesture_confidence = 0.0
         self.simulate_training = simulate_training
+        self.simulated_gesture = None
+        self.last_gesture_change = 0
         
         # Visualization
         self.fig = None
@@ -125,6 +127,33 @@ class EMGDemo:
         self.gesture_ax.set_title('Recognized Gesture')
         self.gesture_ax.set_axis_off()
         
+        # Add gesture buttons
+        self.gesture_buttons = []
+        self.gesture_button_axes = []
+        
+        # Most common gestures to simulate
+        gestures = ["rest", "thumb_flexion", "index_flexion", "middle_flexion", 
+                   "thumb_extension", "index_extension"]
+        
+        for i, gesture in enumerate(gestures):
+            # Create a grid of buttons, 3 per row
+            row = i // 3
+            col = i % 3
+            btn_width = 0.15
+            btn_height = 0.04
+            btn_spacing_x = 0.02
+            btn_spacing_y = 0.01
+            
+            x_pos = 0.1 + col * (btn_width + btn_spacing_x)
+            y_pos = 0.05 - row * (btn_height + btn_spacing_y)
+            
+            btn_ax = plt.axes([x_pos, y_pos, btn_width, btn_height])
+            button = Button(btn_ax, gesture.replace('_', ' ').title())
+            button.on_clicked(lambda event, g=gesture: self._simulate_gesture(g))
+            
+            self.gesture_buttons.append(button)
+            self.gesture_button_axes.append(btn_ax)
+        
         # Add train model button
         self.train_button_ax = plt.axes([0.8, 0.01, 0.15, 0.05])
         self.train_button = Button(self.train_button_ax, 'Train Model')
@@ -166,14 +195,28 @@ class EMGDemo:
         
         # Train the model if needed and simulated training is enabled
         if self.simulate_training and not self.decoder.is_trained:
-            self._train_model()
+            success = self._train_model()
+            if not success:
+                logger.error("Model training failed, trying to continue without classification")
         
         while self.is_running:
             try:
-                # Generate simulated EMG data
-                emg_data = self.emg.simulate_data(duration=0.1)  # 100ms of data
+                # If a gesture has been active for more than 3 seconds, switch back to rest
+                if (self.simulated_gesture is not None and 
+                    self.simulated_gesture != "rest" and 
+                    time.time() - self.last_gesture_change > 3.0):
+                    self.simulated_gesture = "rest"
+                    logger.info("Returning to rest state after gesture")
+                
+                # Generate simulated EMG data with current gesture
+                emg_data = self.emg.simulate_data(
+                    duration=0.1,  # 100ms of data
+                    gesture=self.simulated_gesture
+                )
                 
                 if emg_data is None:
+                    logger.warning("Failed to generate EMG data")
+                    time.sleep(0.1)
                     continue
                 
                 # Store raw data for visualization
@@ -308,6 +351,16 @@ class EMGDemo:
     def _train_model_callback(self, event):
         """Callback for the train model button."""
         threading.Thread(target=self._train_model).start()
+        
+    def _simulate_gesture(self, gesture):
+        """Set a gesture to simulate.
+        
+        Args:
+            gesture (str): Name of the gesture to simulate
+        """
+        self.simulated_gesture = gesture
+        self.last_gesture_change = time.time()
+        logger.info(f"Simulating gesture: {gesture}")
 
 
 def main():
