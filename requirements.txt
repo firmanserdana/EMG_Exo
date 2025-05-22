@@ -12,8 +12,9 @@ joblib>=1.1.0
 # Signal processing
 mne>=1.0.0
 
-# Serial communication
-pyserial>=3.5
+# Communication
+pyserial>=3.5   # For serial communication (Sessantaquatro)
+# socket module is built-in for network communication (Delsys Trigno)
 
 # Data streaming (optional)
 pylsl>=1.14.0

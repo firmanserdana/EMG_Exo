@@ -55,6 +55,18 @@ EMG_CONFIG = {
     "reference": "monopolar"
 }
 
+# Delsys Trigno EMG configuration
+TRIGNO_CONFIG = {
+    "host": "127.0.0.1",  # Default local IP address for the Trigno control utility
+    "command_port": 50040,  # Default command port for the Trigno system
+    "emg_port": 50041,     # Default EMG data port
+    "aux_port": 50042,     # Default accelerometer/auxiliary data port
+    "sampling_rate": 2000, # Default sampling rate in Hz
+    "channels": 16,        # Default: Trigno system supports up to 16 sensors
+    "resolution": 16,      # Bits of resolution
+    "use_aux_data": False  # Whether to use accelerometer/auxiliary data
+}
+
 # EMG processing configuration
 EMG_PROCESSING = {
     "window_size": 1024,  # samples

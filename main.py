@@ -17,23 +17,30 @@ from datetime import datetime
 import logging
 
 # Import local modules
-from emg_acquisition import SessantaquatroEMG
+from emg_selector import get_emg_system, SUPPORTED_EMG_SYSTEMS
 from emg_processing import EMGProcessor
 from emg_decoder import EMGDecoder
 from unity_hand_interface import UnityHandInterface
-from ini import logger, EMG_CONFIG, RECORDING, MODEL_DIR
+from ini import logger, EMG_CONFIG, TRIGNO_CONFIG, RECORDING, MODEL_DIR
 
 
 class EMGExoApplication:
     """Main application class for EMG-controlled exoskeleton/hand."""
     
-    def __init__(self):
-        """Initialize the application components."""
+    def __init__(self, emg_system="sessantaquatro", system_args=None):
+        """Initialize the application components.
+        
+        Args:
+            emg_system (str): EMG acquisition system type to use
+            system_args (dict): Additional arguments for the EMG system
+        """
         # Create component instances
-        self.emg = SessantaquatroEMG()
+        system_args = system_args or {}
+        self.emg = get_emg_system(emg_system, **system_args)
         self.processor = EMGProcessor()
         self.decoder = EMGDecoder()
         self.unity_interface = UnityHandInterface()
+        self.emg_system_type = emg_system
         
         # Thread control
         self.is_running = False
@@ -47,7 +54,7 @@ class EMGExoApplication:
         self.recorded_features = []
         self.recorded_labels = []
         
-        logger.info("EMG Exo Application initialized")
+        logger.info(f"EMG Exo Application initialized with {emg_system} system")
         
     def start(self, recording=False, training=False, decomposition=False):
         """Start the application.
@@ -426,21 +433,54 @@ def main():
     parser.add_argument("--record", action="store_true", help="Record EMG data")
     parser.add_argument("--train", action="store_true", help="Run in training mode")
     parser.add_argument("--decompose", action="store_true", help="Enable motor unit decomposition")
-    parser.add_argument("--port", type=str, help="Serial port for EMG board")
+    
+    # EMG system selection
+    parser.add_argument("--emg-system", choices=SUPPORTED_EMG_SYSTEMS, 
+                        default="sessantaquatro", help="EMG acquisition system to use")
+    
+    # Sessantaquatro arguments
+    parser.add_argument("--port", type=str, help="COM port for Sessantaquatro board")
+    parser.add_argument("--baudrate", type=int, help="Baudrate for Sessantaquatro board")
+    
+    # Delsys Trigno arguments
+    parser.add_argument("--host", type=str, help="Host IP for Delsys Trigno system")
+    parser.add_argument("--command-port", type=int, help="Command port for Trigno system")
+    parser.add_argument("--emg-port", type=int, help="EMG data port for Trigno system")
+    parser.add_argument("--aux-port", type=int, help="Auxiliary data port for Trigno system")
+    
     args = parser.parse_args()
     
-    # If port specified, update config
-    if args.port:
-        EMG_CONFIG["port"] = args.port
+    # Extract EMG system arguments
+    system_args = {}
+    if args.emg_system == "sessantaquatro":
+        if args.port:
+            system_args["port"] = args.port
+            EMG_CONFIG["port"] = args.port  # For compatibility with existing code
+        if args.baudrate:
+            system_args["baudrate"] = args.baudrate
+            EMG_CONFIG["baudrate"] = args.baudrate  # For compatibility with existing code
+    elif args.emg_system == "delsys_trigno":
+        if args.host:
+            system_args["host"] = args.host
+            TRIGNO_CONFIG["host"] = args.host
+        if args.command_port:
+            system_args["command_port"] = args.command_port
+            TRIGNO_CONFIG["command_port"] = args.command_port
+        if args.emg_port:
+            system_args["emg_port"] = args.emg_port
+            TRIGNO_CONFIG["emg_port"] = args.emg_port
+        if args.aux_port:
+            system_args["aux_port"] = args.aux_port
+            TRIGNO_CONFIG["aux_port"] = args.aux_port
     
-    # Create and start the application
-    app = EMGExoApplication()
+    # Create and start the application with the selected EMG system
+    app = EMGExoApplication(emg_system=args.emg_system, system_args=system_args)
     
     try:
         if app.start(recording=args.record, 
                      training=args.train, 
                      decomposition=args.decompose):
-            print("Application started.")
+            print(f"Application started with {args.emg_system} EMG system.")
             print("Press Ctrl+C to stop...")
             
             # Keep the main thread alive

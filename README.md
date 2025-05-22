@@ -1,6 +1,6 @@
 # EMG-Based Hand Control System
 
-A comprehensive system for processing EMG signals, interpreting hand gestures with machine learning, and visualizing results with real-time feedback. The system supports both hardware-based acquisition with the Sessantaquatro board and simulation mode for development and demonstrations without hardware.
+A comprehensive system for processing EMG signals, interpreting hand gestures with machine learning, and visualizing results with real-time feedback. The system supports hardware-based acquisition with either the Sessantaquatro board or Delsys Trigno EMG system, as well as a simulation mode for development and demonstrations without hardware.
 
 ![EMG Visualization Demo](https://via.placeholder.com/800x400?text=EMG+Visualization+Demo)
 
@@ -14,7 +14,10 @@ This application consists of three main components:
 
 ## Features
 
-- **Hardware or Simulation**: Use real Sessantaquatro EMG hardware or realistic signal simulation
+- **Multiple Hardware Support**:
+  - Sessantaquatro EMG board via serial connection
+  - Delsys Trigno EMG system via network connection
+  - Realistic signal simulation for development without hardware
 - **Advanced Signal Processing**:
   - Digital filtering (high-pass, low-pass, notch)
   - Feature extraction (time and frequency domain)
@@ -76,29 +79,77 @@ pip install -r requirements.txt
 
 #### Running the Application
 
-The main application can be run in different modes:
+The main application can be run in different modes and with different EMG systems:
+
+##### Using the Sessantaquatro EMG Board
 
 1. **Normal Mode** - Processes EMG signals and controls the Unity hand:
 ```
-python main.py --port COMx
+python main.py --emg-system sessantaquatro --port COMx
 ```
 
 2. **Training Mode** - Collects labeled EMG data for classifier training:
 ```
-python main.py --train --port COMx
+python main.py --train --emg-system sessantaquatro --port COMx
 ```
 
 3. **Recording Mode** - Records raw EMG data for later analysis:
 ```
-python main.py --record --port COMx
+python main.py --record --emg-system sessantaquatro --port COMx
 ```
 
 4. **Decomposition Mode** - Enables motor unit decomposition:
 ```
-python main.py --decompose --port COMx
+python main.py --decompose --emg-system sessantaquatro --port COMx
 ```
 
 Replace `COMx` with your actual COM port where the Sessantaquatro board is connected.
+
+##### Using the Delsys Trigno EMG System
+
+1. **Normal Mode** - Processes EMG signals and controls the Unity hand:
+```
+python main.py --emg-system delsys_trigno --host 192.168.1.x
+```
+
+2. **Training Mode** - Collects labeled EMG data for classifier training:
+```
+python main.py --train --emg-system delsys_trigno --host 192.168.1.x
+```
+
+3. **Recording Mode** - Records raw EMG data for later analysis:
+```
+python main.py --record --emg-system delsys_trigno --host 192.168.1.x
+```
+
+4. **Decomposition Mode** - Enables motor unit decomposition:
+```
+python main.py --decompose --emg-system delsys_trigno --host 192.168.1.x
+```
+
+Replace `192.168.1.x` with the actual IP address of the computer running the Delsys Trigno Control Utility.
+
+##### Using Simulation Mode
+
+For development or demo purposes without hardware:
+
+```
+python main.py --emg-system simulation
+```
+
+##### Special Delsys Trigno Demo
+
+A dedicated demo script is available for testing just the Delsys Trigno integration:
+
+```
+python delsys_trigno_demo.py --host 192.168.1.x
+```
+
+For testing with simulated data:
+
+```
+python delsys_trigno_demo.py --simulate
+```
 
 #### Modules
 
