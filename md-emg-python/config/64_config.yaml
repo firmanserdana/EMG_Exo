@@ -1,0 +1,2 @@
+ip_address: '192.168.1.2' # use the one of the PC, otherwise try with .3 if it doesn't work
+port: 45454

@@ -1,0 +1,218 @@
+# acquisition parameters
+num_channels_emg: 32  # number of EMG channels
+fsample_emg: 1000 # [Hz] sampling frequency of the EMG signals
+
+# subjects parameters
+subj_type: 'SCI' # options: 'SCI', 'healthy'
+subjects: [0, 1, 2, 3, 4, 5] # list of subjects to use
+
+# task and dataset composition parameters
+task: ['open_close', 'grasp_patterns', 'single_fingers'] #, 'open_close', 'grasp_patterns', 'single_fingers'] # tasks to use - options: 'open_close', 'grasp_patterns', 'single_fingers'
+train_data_type: 'open_loop' # options: 'open_loop', 'both'
+run_model_forward: true # if true the results will be reported by running the model forward on the last closed-loop session for each task
+
+# time of interest for grasping-data epoching (open-loop and closed-loop) parameters
+open_loop_events:
+  grasp_start_name: 'grasp_hold_start' # event name for the start of the grasping phase
+  grasp_start_time: 0 # [s] respect to grasp_start_name
+  grasp_end_name: 'grasp_hold_end' # event name for the end of the grasping phase
+  grasp_end_time: 0 # [s] respect to grasp_end_name
+closed_loop_events:
+  grasp_start_name: 'decoding_start' # event name for the start of the grasping phase
+  grasp_start_time: 0 # [s] respect to grasp_start_name
+  grasp_end_name: 'decoding_stop' # event name for the end of the grasping phase
+  grasp_end_time: 0 # [s] respect to grasp_end_name
+
+configurations:
+  - name: "LSTM_nonorm_s150"
+    signal_filtering:
+      - type: 'notch' # options: 'notch', 'bandpass'
+        params:
+          freq: 50 # [Hz] notch filter frequency
+          Q: 30 # quality factor of the notch filter
+      - type: 'bandpass'
+        params:
+          freq: [15, 450] # [Hz] bandpass filter frequencies
+          order: 5 # order of the bandpass filter
+    features:
+      type: 'rms' # options: 'rms', 'mav', 'raw'
+      seq_len: 5
+      params:
+        win_length: 0.250 # [s] length of the window for features extraction
+        win_shift: 0.150 # [s] shift of the window for features extraction
+    normalization:
+      type: 'none' # options: 'none', 'mvc', 'zscore'
+      params: []
+    model:
+      type: "LSTM"
+      parameters:
+        hidden_size: 300
+        num_layers: 1
+        dropout: 0 # dropout can be add only if num_layers > 1
+        scheduler: 'reduceonplateau'
+    prediction:
+      type: 'consecutive' # options: 'none', 'consecutive'
+      params:
+        num: 5 # number of consecutive predictions to consider for the final prediction
+  # --------------------------------------------------------------------------------------- # 
+  - name: "LSTM_nonorm_s100"
+    signal_filtering:
+      - type: 'notch' # options: 'notch', 'bandpass'
+        params:
+          freq: 50 # [Hz] notch filter frequency
+          Q: 30 # quality factor of the notch filter
+      - type: 'bandpass'
+        params:
+          freq: [15, 450] # [Hz] bandpass filter frequencies
+          order: 5 # order of the bandpass filter
+    features:
+      type: 'rms' # options: 'rms', 'mav', 'raw'
+      seq_len: 5
+      params:
+        win_length: 0.250 # [s] length of the window for features extraction
+        win_shift: 0.100 # [s] shift of the window for features extraction
+    normalization:
+      type: 'none' # options: 'none', 'mvc', 'zscore'
+      params: []
+    model:
+      type: "LSTM"
+      parameters:
+        hidden_size: 300
+        num_layers: 1
+        dropout: 0 # dropout can be add only if num_layers > 1
+        scheduler: 'reduceonplateau'
+    prediction:
+      type: 'consecutive' # options: 'none', 'consecutive'
+      params:
+        num: 5 # number of consecutive predictions to consider for the final prediction
+  # --------------------------------------------------------------------------------------- # 
+  - name: "LSTM_nonorm_s050"
+    signal_filtering:
+      - type: 'notch' # options: 'notch', 'bandpass'
+        params:
+          freq: 50 # [Hz] notch filter frequency
+          Q: 30 # quality factor of the notch filter
+      - type: 'bandpass'
+        params:
+          freq: [15, 450] # [Hz] bandpass filter frequencies
+          order: 5 # order of the bandpass filter
+    features:
+      type: 'rms' # options: 'rms', 'mav', 'raw'
+      seq_len: 5
+      params:
+        win_length: 0.250 # [s] length of the window for features extraction
+        win_shift: 0.050 # [s] shift of the window for features extraction
+    normalization:
+      type: 'none' # options: 'none', 'mvc', 'zscore'
+      params: []
+    model:
+      type: "LSTM"
+      parameters:
+        hidden_size: 300
+        num_layers: 1
+        dropout: 0 # dropout can be add only if num_layers > 1
+        scheduler: 'reduceonplateau'
+    prediction:
+      type: 'consecutive' # options: 'none', 'consecutive'
+      params:
+        num: 5 # number of consecutive predictions to consider for the final prediction
+  # --------------------------------------------------------------------------------------- # 
+  - name: "LSTM_zscore_s150"
+    signal_filtering:
+      - type: 'notch' # options: 'notch', 'bandpass'
+        params:
+          freq: 50 # [Hz] notch filter frequency
+          Q: 30 # quality factor of the notch filter
+      - type: 'bandpass'
+        params:
+          freq: [15, 450] # [Hz] bandpass filter frequencies
+          order: 5 # order of the bandpass filter
+    features:
+      type: 'rms' # options: 'rms', 'mav', 'raw'
+      seq_len: 5
+      params:
+        win_length: 0.250 # [s] length of the window for features extraction
+        win_shift: 0.150 # [s] shift of the window for features extraction
+    normalization:
+      type: 'zscore' # options: 'none', 'mvc', 'zscore'
+      params: 
+        zscore:
+          win_length: 30 # [s] length of the window for z-score normalization
+    model:
+      type: "LSTM"
+      parameters:
+        hidden_size: 300
+        num_layers: 1
+        dropout: 0 # dropout can be add only if num_layers > 1
+        scheduler: 'reduceonplateau'
+    prediction:
+      type: 'consecutive' # options: 'none', 'consecutive'
+      params:
+        num: 5 # number of consecutive predictions to consider for the final prediction
+  # --------------------------------------------------------------------------------------- # 
+  - name: "LSTM_zscore_s100"
+    signal_filtering:
+      - type: 'notch' # options: 'notch', 'bandpass'
+        params:
+          freq: 50 # [Hz] notch filter frequency
+          Q: 30 # quality factor of the notch filter
+      - type: 'bandpass'
+        params:
+          freq: [15, 450] # [Hz] bandpass filter frequencies
+          order: 5 # order of the bandpass filter
+    features:
+      type: 'rms' # options: 'rms', 'mav', 'raw'
+      seq_len: 5
+      params:
+        win_length: 0.250 # [s] length of the window for features extraction
+        win_shift: 0.100 # [s] shift of the window for features extraction
+    normalization:
+      type: 'zscore' # options: 'none', 'mvc', 'zscore'
+      params: 
+        zscore:
+          win_length: 30 # [s] length of the window for z-score normalization
+    model:
+      type: "LSTM"
+      parameters:
+        hidden_size: 300
+        num_layers: 1
+        dropout: 0 # dropout can be add only if num_layers > 1
+        scheduler: 'reduceonplateau'
+    prediction:
+      type: 'consecutive' # options: 'none', 'consecutive'
+      params:
+        num: 5 # number of consecutive predictions to consider for the final prediction
+  # --------------------------------------------------------------------------------------- # 
+  - name: "LSTM_zscore_s050"
+    signal_filtering:
+      - type: 'notch' # options: 'notch', 'bandpass'
+        params:
+          freq: 50 # [Hz] notch filter frequency
+          Q: 30 # quality factor of the notch filter
+      - type: 'bandpass'
+        params:
+          freq: [15, 450] # [Hz] bandpass filter frequencies
+          order: 5 # order of the bandpass filter
+    features:
+      type: 'rms' # options: 'rms', 'mav', 'raw'
+      seq_len: 5
+      params:
+        win_length: 0.250 # [s] length of the window for features extraction
+        win_shift: 0.050 # [s] shift of the window for features extraction
+    normalization:
+      type: 'zscore' # options: 'none', 'mvc', 'zscore'
+      params: 
+        zscore:
+          win_length: 30 # [s] length of the window for z-score normalization
+    model:
+      type: "LSTM"
+      parameters:
+        hidden_size: 300
+        num_layers: 1
+        dropout: 0 # dropout can be add only if num_layers > 1
+        scheduler: 'reduceonplateau'
+    prediction:
+      type: 'consecutive' # options: 'none', 'consecutive'
+      params:
+        num: 5 # number of consecutive predictions to consider for the final prediction
+  # --------------------------------------------------------------------------------------- # 

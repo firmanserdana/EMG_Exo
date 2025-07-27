@@ -1,0 +1,57 @@
+# type of normalization to apply to the EMG signal
+normalization: 'zscore' # options: [none, mvc, zscore]
+normalization_params:
+  zscore:
+    win_length: 20 # [s] length of the window for z-score normalization
+
+feature_type: 'rms+envelope' # type of feature to extract from the EMG signal (options: mav,rms,rms+freq,raw,envelope)
+
+# frequency features parameters
+freq_params:
+  fft_win_size: 0.250 # # [s] window size for the sliding window fft calculation
+  fft_win_shift: 0.125 # [s] window shift for the sliding window fft calculation
+  fft_freq_range: [0,500] # [Hz] frequency range of interest for the fft calculation
+  fft_bands: [
+    [100,300],[300,500]
+  ] # [Hz] frequency bands of interest to retain from the fft calculation
+  zero_padding_factor: 2 # factor to apply to the fft window size for zero-padding (e.g., 2 means double the window size)
+
+# time of interest for grasping-data epoching (open-loop and closed-loop)
+open_loop_events:
+  grasp_start_name: 'grasp_hold_start' # event name for the start of the grasping phase
+  grasp_start_time: 0 # [s] respect to grasp_start_name
+  grasp_end_name: 'grasp_hold_end' # event name for the end of the grasping phase
+  grasp_end_time: 0 # [s] respect to grasp_end_name
+  rest_start_name: 'grasp_start' # event name for the start of the rest phase
+  rest_start_time: -1 # [s] respect to rest_start_name
+closed_loop_events:
+  grasp_start_name: 'decoding_start' # event name for the start of the grasping phase
+  grasp_start_time: 0 # [s] respect to grasp_start_name
+  grasp_end_name: 'decoding_stop' # event name for the end of the grasping phase
+  grasp_end_time: 0 # [s] respect to grasp_end_name
+  rest_start_name: 'decoding_start' # event name for the start of the rest phase
+  rest_start_time: -0.5 # [s] respect to rest_start_name
+
+# features window parameters
+windows_length:
+  mav: # Mean Absolute Value (MAV) features
+    win_length: 0.250 # [s] length of the window for MAV features
+    win_shift: 0.150 # [s] shift of the window for MAV features
+  rms: # Root Mean Square (RMS) features
+    win_length: 0.250 # [s] length of the window for RMS features
+    win_shift: 0.150 # [s] shift of the window for RMS features
+  raw: # Raw EMG features
+    win_length: 0.250 # [s] length of the window for raw features
+    win_shift: 0.150 # [s] shift of the window for raw features
+  rms+freq: # Root Mean Square (RMS) + FFT time-frequency features
+    win_length: 0.250 # [s] length of the window for RMS features
+    win_shift: 0.125 # [s] shift of the window for RMS features
+  envelope: # Envelope features
+    win_length: 0.250 # [s] length of the window for envelope features
+    win_shift: 0.150 # [s] shift of the window for envelope features
+  rms+envelope: # RMS+Envelope features
+    win_length: 0.250 # [s] length of the window for envelope features
+    win_shift: 0.150 # [s] shift of the window for envelope features
+
+# labels smoothing to apply for the training
+labels_smoothing: 0

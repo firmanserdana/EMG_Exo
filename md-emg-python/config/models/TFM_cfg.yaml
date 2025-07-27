@@ -1,0 +1,6 @@
+emb_size: 80 # embedding dimension
+num_heads: 10
+num_layers: 6
+dropout: 0.25
+use_cls_token: true
+scheduler: 'steplr'

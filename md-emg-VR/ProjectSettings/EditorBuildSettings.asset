@@ -1,0 +1,23 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1045 &1
+EditorBuildSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/graspingStartUI.unity
+    guid: 8f55d12df2456cf448b64eb4347508d1
+  - enabled: 1
+    path: Assets/Scenes/graspingOpenLoop.unity
+    guid: 9fc0d4010bbf28b4594072e72b8655ab
+  - enabled: 1
+    path: Assets/Scenes/graspingClosedLoop.unity
+    guid: fc9937ebfd4a07c44a39bc52b9be8272
+  - enabled: 1
+    path: Assets/Scenes/graspingMVC.unity
+    guid: 508e83ffd9dafd947a260a8647558925
+  - enabled: 1
+    path: Assets/Scenes/graspingFeedback.unity
+    guid: 612afe5f93bec284f8c0e95e108d3b10
+  m_configObjects: {}

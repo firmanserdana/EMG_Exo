@@ -1,0 +1,23 @@
+## NN TRAINING
+
+# training data parameters
+batch_size: 32
+train_size: 0.75
+valid_size: 0.15
+test_size: 0.10
+
+# training parameters
+num_epochs: 500
+min_num_epochs: 200 # minimum number of epochs to train the model
+patience: 50 # number of epochs to wait for improvement before early stopping (after min_num_epochs)
+learning_rate: 0.0002
+weight_decay: 0.1
+scheduler_step_size: 10
+scheduler_gamma: 0.05 # reduce the learning rate by this factor every scheduler_step_size epochs
+log_epochs_training: true # whether to log the training and validation losses every log_epochs_num epochs
+log_epochs_num: 1 # number of epochs to wait before logging the training and validation losses
+log_plot: true # whether to log the training and validation losses + decoding results as a plot
+
+# noise loss function parameters
+noise_std: 0.1 # standard deviation of the noise to add to the input data
+noise_loss_weight: 0.1 # weight of the noise loss in the total loss function

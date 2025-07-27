@@ -1,0 +1,7 @@
+time_conv_size: 150
+time_stride: 75
+num_time_filters: 32
+hidden_size: 300
+num_layers: 1
+dropout: 0 # dropout can be add only if num_layers > 1
+scheduler: 'reduceonplateau'

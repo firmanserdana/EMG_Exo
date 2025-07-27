@@ -1,0 +1,17 @@
+numpy==2.0.2
+pandas==2.2.3
+torch==2.5.1
+torchvision==0.20.1
+torchaudio==2.5.1
+scikit-learn
+PyYAML==6.0.2
+h5py==3.12.1
+pynwb==2.8.3
+comet_ml==3.47.3
+seaborn==0.13.2
+einops==0.8.0
+pickle-mixin==1.0.2
+fastdtw==0.3.4
+matplotlib==3.10.1
+keyboard==0.13.5
+dearpygui==2.0.0

@@ -1,0 +1,28 @@
+# EMG configuration parameters
+num_channels_emg: 32 # number of EMG channels of the setup (by default starting from 0)
+fsample_emg: 1000 # [Hz] sampling rate of the EMG data
+
+# acquisition parameters
+acq_buffer_length: 2.00 # [s] length of the buffer to save the EMG data - used also for the filtering of data used online (too small could introduce ridge artifacts)
+
+# signal processing
+processing_interval: 0.150 # [s] time interval between consecutive processing of the EMG data - this interval influence the decoding speed
+
+notch: 
+  freq: 50 # [Hz] notch filter frequency
+  Q: 30 # quality factor of the notch filter
+
+bandpass: 
+  freq: [15, 450] # [Hz] bandpass filter frequencies
+  order: 5 # order of the bandpass filter
+
+# enable this stream to stream the EMG data (+ predictions when decoding)
+stream: 
+  enabled: true # if true, the EMG data is streamed for online visualization
+  sender:
+    host: '169.254.123.49' # 'localhost' or '169.254.201.189'
+    port: 55001
+  receiver:
+    host: '0.0.0.0'
+    port: 55001
+  timeout: 2 # [s] timeout for the server to wait for a connection

@@ -1,0 +1,12 @@
+{
+  "trialsStartDelay": 3000,
+  "trialIntervalDuration": 2500,
+  "cueGraspStartInterval": 750,
+  "holdDuration": 2000,
+  "graspLabelsOpenClose": [ "HandOpen", "HandClose" ],
+  "graspIDOpenClose": [ 0, 1 ],
+  "graspLabelsGraspPatterns": [ "HookGrasp", "LateralGrasp", "IndexPointing" ],
+  "graspIDGraspPatterns": [ 2, 3, 4 ],
+  "graspLabelsSingleFingers": [ "ThumbFlexion", "IndexFlexion", "MRPFlexion" ],
+  "graspIDSingleFingers": [ 5, 6, 7 ]
+}

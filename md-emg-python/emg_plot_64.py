@@ -1,0 +1,265 @@
+import os
+import time
+import yaml
+from multiprocessing import Process, Queue, Value
+from threading import Thread
+
+from realtime_components.acquisition import AcquisitionLoop
+from realtime_components.decoding import *
+from realtime_components.control import *
+from realtime_components.streaming import *
+from utils.signal_filtering import *
+from utils.communication_64 import *
+from utils.network_utils import *
+from utils.data_utils import *
+
+# Thread for saving the predictions made by the model
+def StorePredictionLoop(pred_save_queue):
+    print('Starting the prediction saving loop')
+
+    while True:
+        # Get the predictions from the queue
+        predictions = pred_save_queue.get()
+
+        if predictions is not None:
+            continue  # just clearing the queue
+        else:
+            break
+
+    print('Prediction saving loop stopped')
+
+# Thread for saving the EMG raw data recorded
+def SaveData(save_queue):
+    print('Starting the saving loop')
+
+    while True:  
+        try:
+            data = save_queue.get()
+
+            if data is not None:
+                continue  # just clearing the queue
+            else:
+                break
+        except KeyboardInterrupt:
+            break
+
+    print('Saving loop stopped')
+
+# ------ MAIN ------
+if __name__ == "__main__":
+    # TODO: move this to the parameters input of the script - since it's based on the type of decoding being performed
+    subj_type = 'SCI' # 'healthy' or 'SCI' - TODO: make this a parameter of the script
+    subj = 6 # TODO: make this a parameter of the script
+    task = 'open_close' # options: ['open_close','grasp_patterns','single_fingers'] - TODO: make this a parameter of the script
+    decoding_active = True # TODO: make this a parameter of the script
+    model_version = 'open_loop' # options ['open_loop','both'] - TODO: make this a parameter of the script
+
+    subj_id = f'S{subj}'
+
+    # folders definition
+    config_folder = 'config'
+    data_folder = os.path.join('data', subj_type, subj_id)
+    data_mvc_folder = os.path.join(data_folder, 'mvc') # destination folder for the MVC data
+    models_folder = os.path.join('models-subjects', subj_type, subj_id, task)
+
+    # loading configurations files
+    with open(os.path.join(config_folder, '64_config.yaml')) as f:
+        config_64 = yaml.load(f, Loader=yaml.FullLoader)
+
+    if decoding_active:  
+        with open(os.path.join(config_folder, 'tcp_server_events.yaml')) as f:
+            tcp_server_events = yaml.load(f, Loader=yaml.FullLoader)
+
+    with open(os.path.join(config_folder, 'emg_signal_processing.yaml')) as f:
+        emg_proc_cfg = yaml.load(f, Loader=yaml.FullLoader)
+
+    with open(os.path.join(config_folder, 'features_params.yaml')) as f:
+        features_cfg = yaml.load(f, Loader=yaml.FullLoader)
+
+    with open(os.path.join(config_folder, 'decoding_params.yaml')) as f:
+        decoding_cfg = yaml.load(f, Loader=yaml.FullLoader)
+            
+    # 64 connection parameters
+    ip_address = config_64['ip_address']
+    port = config_64['port']   
+
+    # file names setup
+    mvc_file = os.path.join(data_mvc_folder, 'dataset_mvc.pkl')
+
+    # controlling variable and queues initialization
+    stop_program = Value('b', False)
+    is_decoding = Value('b', True if decoding_active else False) # variable to control when the decoding is active
+
+    save_queue = Queue()
+    dec_queue = Queue()
+    dec_state_queue = Queue() # queue for the decoding state (if needed)
+
+    if decoding_active:
+        pred_control_queue = Queue() # predictions queue for the session control
+        pred_save_queue = Queue() # predictions queue for the saving of the predictions
+
+    # queue for the streaming data
+    stream_queue = Queue()
+
+    # Open connection to the amplifier      
+    num_channels_emg = emg_proc_cfg['num_channels_emg'] # number of EMG channels to be used       
+    (conn_64,num_channels_64,fsample,bytes_in_sample) = connect_to_sq(ip_address, port, num_channels=num_channels_emg)
+
+    if conn_64 is None:
+        print("Failed to connect to the amplifier. Exiting the program.")
+        exit()
+
+    # setup params
+    acq_params = {
+        'num_channels_64': num_channels_64, # number of total channels from the 64
+        'num_channels_emg': num_channels_emg, # number of EMG channels to be used
+        'fsample': fsample, 
+        'buffer_length': emg_proc_cfg['acq_buffer_length'],
+        'bytes_in_sample': bytes_in_sample,
+        'notch': emg_proc_cfg['notch'] if 'notch' in emg_proc_cfg else False,
+        'bandpass': emg_proc_cfg['bandpass'] if 'bandpass' in emg_proc_cfg else False,
+        'streaming_active': True,
+        'proc_interval': emg_proc_cfg['processing_interval']
+    }
+
+    if features_cfg['normalization'] == 'mvc':
+        acq_params['mvc_normalization'] = True
+        acq_params['mvc_file'] = mvc_file
+    else:
+        acq_params['mvc_normalization'] = False
+
+    if features_cfg['normalization'] == 'zscore':
+        acq_params['zscore_normalization'] = True
+        acq_params['zscore_win_len'] = features_cfg['normalization_params']['zscore']['win_length']
+    else:
+        acq_params['zscore_normalization'] = False
+
+    if decoding_active:
+        with open(os.path.join(config_folder, 'subjects', subj_type, f'{subj_id}.yaml')) as f:
+            subj_cfg = yaml.load(f, Loader=yaml.FullLoader)
+
+        model_type = subj_cfg[f'task_{task}']['model_type'] # options: ['LSTM', 'TFM', 'CTFM']
+        model_file = os.path.join(models_folder, f'{model_type}_{model_version}.pth')
+
+        labels_encoder_file = os.path.join(data_folder, f'{model_version}_{task}_labels_encoder.pkl')
+
+        seq_len = subj_cfg[f'task_{task}']['seq_len'] # sequence length for the model    
+        feature_type = features_cfg['feature_type'] # type of features to be extracted
+        feature_win_len = features_cfg['windows_length'][feature_type]['win_length']
+        feature_win_shift = features_cfg['windows_length'][feature_type]['win_shift']
+
+        dec_params = {
+            'feature_type': feature_type,
+            'dec_win_length': feature_win_len,
+            'dec_win_shift': feature_win_shift,
+            'model_file': model_file,
+            'labels_encoder_file': labels_encoder_file,
+            'seq_len': seq_len,
+            'buffer_predictions_size': decoding_cfg['buffer_predictions_size']
+        }
+
+        control_params = {
+            'proc_interval': emg_proc_cfg['processing_interval'],
+            'use_consec_pred': decoding_cfg['use_consec_pred']
+        }
+
+        if decoding_cfg['use_consec_pred']:
+            control_params['num_consec_pred'] = decoding_cfg['num_consec_pred']
+    else:
+        dec_params = None
+        control_params = None
+
+    if decoding_active:
+        # opening the events server socket
+        events_socket = socket_connect(
+            host=tcp_server_events['host'], 
+            port=tcp_server_events['port'],
+            timeout=tcp_server_events['timeout']
+        )
+
+        if events_socket is None:
+            print("Failed to connect to the events server. Exiting the program.")
+            exit()
+
+    # opening the streaming socket
+    stream_socket = socket_connect(
+        host=emg_proc_cfg['stream']['sender']['host'], 
+        port=emg_proc_cfg['stream']['sender']['port'],
+        timeout=emg_proc_cfg['stream']['timeout']
+    )
+
+    if stream_socket is None:
+        print("Failed to connect to the streaming server. Exiting the program.")
+        exit()
+
+    # starting the sub-processes
+    p_acquisition = Process(
+        target=AcquisitionLoop, 
+        args=(conn_64, acq_params, dec_params, dec_queue, save_queue, stop_program, decoding_active, is_decoding, stream_queue)
+    )
+    p_datasave = Thread(target=SaveData, args=(save_queue,)) # better using Thread for I/O workers      
+    
+    if decoding_active:
+        p_decoding = Process(
+            target=DecodingLoop, 
+            args=(acq_params, dec_params, dec_queue, pred_control_queue, pred_save_queue, stop_program, stream_queue)
+        )
+        p_control = Process(
+            target=ControlLoop, 
+            args=(events_socket, control_params, pred_control_queue, stop_program)
+        )
+        p_pred_save = Thread(
+            target=StorePredictionLoop, 
+            args=(pred_save_queue,)
+        )
+
+    p_stream = Thread(
+        target=StreamDataLoop, 
+        args=(stream_socket, stream_queue, stop_program)
+    )
+    
+    print(f'\nStarting the acquisition system: {num_channels_emg} channels with {fsample} sampling rate')
+
+    p_acquisition.start()
+    p_datasave.start()
+
+    if decoding_active:
+        p_decoding.start()
+        p_control.start()
+        p_pred_save.start()
+
+    p_stream.start()
+
+    time.sleep(2.5) # wait for the processes to start
+
+    try:   
+        input("Press Enter to stop the acquisition...")  # wait for the user to start the acquisition
+    except KeyboardInterrupt:
+        print("\nStopping the program...")
+    
+    stop_program.value = True
+
+    if p_datasave.is_alive():
+        p_datasave.join()  
+
+    time.sleep(2) # sleep for allowing the threads to complete the saving
+
+    print("Events socket closed")
+
+    if decoding_active:
+        if p_decoding.is_alive():
+            p_decoding.terminate()
+
+        if p_control.is_alive():
+            p_control.terminate()
+
+        if p_pred_save.is_alive():
+            p_pred_save.join()
+
+    socket_close(stream_socket)
+    print("Streaming socket closed")
+
+    if p_acquisition.is_alive():
+        p_acquisition.terminate()
+
+    print("\nProgram ended")

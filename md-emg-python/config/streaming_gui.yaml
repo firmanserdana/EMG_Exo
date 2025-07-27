@@ -1,0 +1,5 @@
+# EMG signal plot
+raw_signal_length: 15 # [s] length of the raw signal to be displayed in the GUI
+
+# Decoding predictions plots
+pred_probs_num: 30 # number of predictions to be displayed in the GUI
