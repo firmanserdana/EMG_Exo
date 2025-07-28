@@ -55,16 +55,6 @@ The project is organized with the following major components:
 
 ```
 EMG_Exo/
-├── emg_acquisition.py       # EMG signal acquisition interface
-├── emg_processing.py        # Signal processing algorithms
-├── emg_decoder.py           # Gesture classification module
-├── emg_visualizer.py        # Enhanced visualization interface
-├── data_recorder.py         # Data recording and export utilities
-├── utilities.py             # Shared utility functions
-├── simple_demo.py           # Standalone demonstration application
-├── demo.py                  # Enhanced demo with more features
-├── requirements.txt         # Python dependencies
-│
 ├── md-emg-python/           # Advanced EMG processing framework
 │   ├── emg_control_64.py    # 64-channel EMG control system
 │   ├── emg_plot_64.py       # Advanced visualization
