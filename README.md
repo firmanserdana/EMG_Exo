@@ -1,6 +1,13 @@
 # EMG-Based Hand Control System
 
-A comprehensive system for processing EMG signals, interpreting hand gestures with machine learning, and providing real-time feedback via visualization and VR interfaces. The system supports hardware-based acquisition with various EMG systems as well as a simulation mode for development and demonstrations without hardware.
+A comprehensive system for processing EMG signals, interpreting hand gestures with machine learning, and providing real-time feedback via visualization and VR interfaces. The system supports hardware-based acquisition with various EMG systems as well as a s   - Multiple training and feedback modes
+   - Customizable animation configurations
+
+3. **Advanced Research Tools**
+   - Real-time signal analysis
+   - Advanced machine learning algorithm implementations
+   - Model optimization and evaluation pipeline
+   - Scientific data visualization and exportn mode for development and demonstrations without hardware.
 
 ![EMG Visualization Demo](https://via.placeholder.com/800x400?text=EMG+Visualization+Demo)
 
@@ -84,8 +91,7 @@ EMG_Exo/
 ### Quick Start
 
 1. Clone the repository
-2. Install the requirements: `pip install -r requirements.txt`
-3. Run the simple demo: `python simple_demo.py --enhanced-viz`
+2. Install the requirements for the advanced system: `pip install -r md-emg-python/requirements.txt`
 
 For the full VR integration:
 1. Open the Unity project in the `md-emg-VR` folder using Unity Hub
@@ -97,13 +103,11 @@ See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions and [FEAT
 ### Documentation
 
 - [API Documentation](API_DOCUMENTATION.md): Complete API reference
-- [Features Guide](FEATURES_GUIDE.md): Guide to advanced visualization and data recording
 
 ## Prerequisites
 
 - Python 3.8 or higher
-- NumPy, PyQt5/6, scikit-learn, matplotlib, and other dependencies listed in requirements.txt
-- For 64-channel system: PyTorch, h5py, dearpygui, and other dependencies in md-emg-python/requirements.txt
+- PyTorch, h5py, dearpygui, and other dependencies in md-emg-python/requirements.txt
 - Optional: Unity 2022.3 or higher for VR integration
 - Optional: Sessantaquatro EMG board or other hardware for physical acquisition
 
@@ -115,36 +119,27 @@ git clone https://github.com/firmanserdana/EMG_Exo.git
 cd EMG_Exo
 ```
 
-2. Install the basic requirements:
-```bash
-pip install -r requirements.txt
-```
-
-3. For advanced features (64-channel system, machine learning models):
+2. Install the advanced 64-channel system requirements:
 ```bash
 pip install -r md-emg-python/requirements.txt
 ```
 
-4. For VR integration, open the Unity project in the `md-emg-VR` folder using Unity Hub
+3. For VR integration, open the Unity project in the `md-emg-VR` folder using Unity Hub
 
 ## Usage
 
-### Basic Demo Applications
+### Main Applications
 
-The repository provides several demo applications:
+The repository provides several main applications:
 
 ```bash
-# Run the simple demo with enhanced visualization
-python simple_demo.py --enhanced-viz
+# Run the 64-channel EMG system
+cd md-emg-python
+python emg_control_64.py
 
-# Run the simple demo with data recording
-python simple_demo.py
-
-# Run the more advanced demo with 8 channels
-python demo.py --channels 8
-
-# Disable auto-training in the demo
-python demo.py --disable-training
+# Run the EMG visualization
+cd md-emg-python
+python emg_plot_64.py
 ```
 
 ### Advanced 64-Channel System
@@ -168,49 +163,7 @@ python md-emg-python/model_evaluate.py --model models/my_model.pkl
 python md-emg-python/streaming_gui.py
 ```
 
-### Python API
-
-The system can be used as a Python library:
-
-```python
-# Simple demo API
-from emg_acquisition import SessantaquatroEMG
-from emg_processing import EMGProcessor
-from emg_decoder import EMGDecoder
-from emg_visualizer import EMGVisualizer
-from data_recorder import EMGDataRecorder
-
-# Initialize components
-emg = SessantaquatroEMG()
-processor = EMGProcessor(channel_count=8)
-decoder = EMGDecoder()
-visualizer = EMGVisualizer(channel_count=8)
-recorder = EMGDataRecorder()
-
-# Start recording
-recorder.start_recording()
-
-# Set up visualization
-visualizer.setup()
-visualizer.start_animation()
-
-# Main loop
-while True:
-    # Get EMG data (real or simulated)
-    emg_data = emg.read() or emg.simulate_data()
-    
-    # Process data
-    processor.add_samples(emg_data)
-    features = processor.extract_features()
-    
-    # Classify gesture
-    gesture_id, gesture_name, confidence = decoder.classify(features)
-    
-    # Update visualization and record data
-    visualizer.add_data(emg_data)
-    visualizer.set_gesture(gesture_name, confidence)
-    recorder.add_data(emg_data, features, gesture_name)
-```
+### 64-Channel System API
 
 ### 64-Channel System API
 
@@ -261,59 +214,38 @@ python md-emg-python/emg_control_64.py
    - Customizable hand animation configurations
    - Training and feedback modes for rehabilitation
 
-### Data Recording and Export
+### Data Management
 
-The system includes comprehensive data recording capabilities:
+The advanced 64-channel system includes comprehensive data management capabilities:
 
 ```python
-# Start a recording session
-python simple_demo.py
+# Example of data management in the 64-channel system
+python md-emg-python/model_train.py --config config/decoding_train_grasp_patterns.yaml --save-data
 
-# Use the GUI to control recording:
-# 1. Click "Start Recording" to begin
-# 2. Perform gestures
-# 3. Click button again to stop recording
-# 4. Click "Export Data" to convert to MATLAB format
-```
-
-Recorded data is organized in the `emg_recordings` directory:
-```
-emg_recordings/
-  ├── session_20250728_143015/
-  │   ├── session_info.json     # Session metadata
-  │   ├── raw_data.npz          # Raw EMG signals
-  │   ├── features.csv          # Extracted features
-  │   ├── gestures.csv          # Gesture labels with timestamps
-  │   └── emg_data.mat          # MATLAB export (if selected)
+# Data will be stored in the configured directories based on the YAML configuration
 ```
 
 ### Visualization Options
 
-The enhanced visualization system provides multiple view modes:
+The 64-channel EMG visualization provides advanced analysis features:
 
 ```bash
-# Run demo with enhanced visualization
-python simple_demo.py --enhanced-viz
+# Run the EMG visualization tool
+python md-emg-python/emg_plot_64.py
+
+# Or use the streaming GUI for real-time visualization
+python md-emg-python/streaming_gui.py
 ```
 
 This provides:
-- Time-domain signal display
-- RMS envelope visualization 
-- Channel visibility controls
-- Status messages and gesture recognition display
+- Multi-channel signal display
+- Real-time decoding visualization
+- Advanced signal processing views
+- Customizable display options
 
 ### Key Modules
 
 The system consists of these key modules:
-
-**Base System:**
-- `emg_acquisition.py` - Interfaces with EMG hardware or provides signal simulation
-- `emg_processing.py` - Signal preprocessing, filtering, and feature extraction
-- `emg_decoder.py` - Gesture classification with machine learning
-- `emg_visualizer.py` - Enhanced visualization with multiple view modes
-- `data_recorder.py` - Data recording and export utilities
-- `utilities.py` - Shared utility functions
-- `simple_demo.py` & `demo.py` - Demo applications
 
 **Advanced 64-Channel System (md-emg-python):**
 - `emg_control_64.py` - Main control script for 64-channel EMG system
@@ -331,15 +263,6 @@ The system consists of these key modules:
 See the [FEATURES_GUIDE.md](FEATURES_GUIDE.md) for detailed information on using the advanced features.
 
 ## System Components
-
-### Basic EMG Processing System
-The core system provides a complete pipeline for EMG signal processing and gesture recognition:
-
-- **Signal Acquisition**: Interfaces with hardware or generates simulated signals with realistic characteristics
-- **Signal Processing**: Implements filtering, feature extraction, and envelope detection
-- **Gesture Recognition**: Machine learning-based classification with confidence metrics
-- **Visualization**: Real-time signal display with multiple view modes
-- **Data Recording**: Comprehensive data recording and export in multiple formats
 
 ### Advanced 64-Channel System
 The md-emg-python module extends the system for research-grade analysis:
@@ -363,25 +286,13 @@ The md-emg-VR module provides a Unity-based VR interface:
 
 The latest version includes several new features:
 
-1. **Enhanced Data Recording System**
-   - Comprehensive session-based recording
-   - Multiple export formats (CSV, NPZ, MATLAB)
-   - Gesture labeling and timestamps
-   - Metadata and session management
-
-2. **Advanced Visualization Options**
-   - Multiple visualization modes (time domain, RMS envelope)
-   - Spectrogram visualization for frequency analysis
-   - Channel visibility controls
-   - Interactive interface with status messages
-
-3. **64-Channel System Integration**
+1. **64-Channel System Integration**
    - Support for high-density EMG arrays
    - Real-time signal processing optimizations
    - Advanced machine learning model implementations
    - Streaming visualization with dearpygui
 
-4. **VR Hand Visualization**
+2. **VR Hand Visualization**
    - Unity-based hand model with natural movement
    - TCP/IP communication interface
    - Multiple training and feedback modes
@@ -393,14 +304,13 @@ The latest version includes several new features:
    - Amplitude modulation for realistic envelopes
    - Customizable noise and artifact simulation
 
-For a complete list of features, see the [FEATURES_GUIDE.md](FEATURES_GUIDE.md) documentation.
+For a complete list of features, see the md-emg-python and md-emg-VR directories.
 
 ## Requirements and Compatibility
 
 ### Software Requirements
 - **Python**: Python 3.8 or higher
-- **Basic Dependencies**: NumPy, matplotlib, scikit-learn, PyQt5/6
-- **Advanced Dependencies**: PyTorch, h5py, pandas, dearpygui
+- **Core Dependencies**: PyTorch, h5py, pandas, dearpygui, NumPy, scikit-learn
 - **Unity**: Unity 2022.3 or higher (for VR integration)
 
 ### Hardware Compatibility
