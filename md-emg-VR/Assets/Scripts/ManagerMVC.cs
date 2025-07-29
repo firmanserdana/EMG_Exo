@@ -62,7 +62,7 @@ public class ManagerMVC : MonoBehaviour
         btnStop.interactable = false;
 
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
         string json = File.ReadAllText(Path.Combine(configPath, "MVCConfig.json"));
         sessionConfig = JsonUtility.FromJson<MVCConfig>(json);
@@ -90,7 +90,7 @@ public class ManagerMVC : MonoBehaviour
             Debug.Log("Ending MVC grasp");
         }
     }
-    
+
     IEnumerator MVCExecutor()
     {
         // Reset the GUI instruction for the grasp and reset the GUI state
@@ -162,7 +162,7 @@ public class ManagerMVC : MonoBehaviour
         Debug.Log("Application exit");
     }
 
-    void RegisterEvent(string eventVal, int? eventID=null)
+    void RegisterEvent(string eventVal, int? eventID = null)
     {
         TcpServerManager.Instance.SendMessageToClient(eventVal, eventID);
     }

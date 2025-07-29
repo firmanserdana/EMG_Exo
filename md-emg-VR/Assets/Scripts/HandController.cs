@@ -22,9 +22,9 @@ public class HandController : MonoBehaviour
     private void Start()
     {
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
-        string json = File.ReadAllText(Path.Combine(configPath,"HandConfig.json"));
+        string json = File.ReadAllText(Path.Combine(configPath, "HandConfig.json"));
         handConfig = JsonUtility.FromJson<HandConfig>(json);
 
         json = File.ReadAllText(Path.Combine(configPath, "AnimationConfig.json"));

@@ -79,7 +79,7 @@ public class ManagerDecodingFeedback : MonoBehaviour
         btnStop.interactable = false;
 
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
         string json = File.ReadAllText(Path.Combine(configPath, "ClosedLoopConfig.json"));
         sessionConfig = JsonUtility.FromJson<ClosedLoopConfig>(json);

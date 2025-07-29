@@ -62,7 +62,7 @@ public class StartUI : MonoBehaviour
     void Start()
     {
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
         string json = File.ReadAllText(Path.Combine(configPath, "OpenLoopConfig.json"));
         openLoopSessionConfig = JsonUtility.FromJson<OpenLoopConfig>(json);
@@ -101,7 +101,7 @@ public class StartUI : MonoBehaviour
             {
                 numClass = closedLoopSessionConfig.graspIDOpenClose.Length;
             }
-            
+
             SessionControl.numTotalTrials = GameSettings.numTrialsPerGrasp * numClass;
         }
         else if (GameSettings.graspingType == GraspingType.SingleFingers)
@@ -132,11 +132,11 @@ public class StartUI : MonoBehaviour
         }
 
         if (GameSettings.acquisitionType == AcquisitionType.OpenLoop)
-        {            
+        {
             SceneManager.LoadScene(openLoopSceneName);
         }
         else if (GameSettings.acquisitionType == AcquisitionType.ClosedLoop)
-        {            
+        {
             // Extract value from the TrialDuration input field
             if (trialDurationInputField != null && int.TryParse(trialDurationInputField.text, out int trialDurationValue))
             {

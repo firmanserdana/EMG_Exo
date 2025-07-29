@@ -73,7 +73,7 @@ public class ManagerOpenLoop : MonoBehaviour
         UpdateTrialsLabel();
 
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
         string json = File.ReadAllText(Path.Combine(configPath, "OpenLoopConfig.json"));
         sessionConfig = JsonUtility.FromJson<OpenLoopConfig>(json);
@@ -177,7 +177,7 @@ public class ManagerOpenLoop : MonoBehaviour
     void Update()
     {
     }
-    
+
     IEnumerator TrialsExecutor()
     {
         float intervalSeconds = sessionConfig.trialIntervalDuration / 1000;
@@ -212,7 +212,7 @@ public class ManagerOpenLoop : MonoBehaviour
                     leftHand.SetActive(false);
                 }
                 else
-                { 
+                {
                     yield return new WaitForSeconds(intervalSeconds);
                 }
             }
@@ -320,7 +320,7 @@ public class ManagerOpenLoop : MonoBehaviour
         lblTrialsCount.text = $"Trials: {SessionControl.trlProgression}/{SessionControl.numTotalTrials}";
     }
 
-    void RegisterEvent(string eventVal, int? eventID=null)
+    void RegisterEvent(string eventVal, int? eventID = null)
     {
         TcpServerManager.Instance.SendMessageToClient(eventVal, eventID);
     }

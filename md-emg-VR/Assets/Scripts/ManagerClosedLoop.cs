@@ -85,7 +85,7 @@ public class ManagerClosedLoop : MonoBehaviour
         UpdateTrialsLabel();
 
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
         string json = File.ReadAllText(Path.Combine(configPath, "ClosedLoopConfig.json"));
         sessionConfig = JsonUtility.FromJson<ClosedLoopConfig>(json);
@@ -268,7 +268,7 @@ public class ManagerClosedLoop : MonoBehaviour
             {
                 yield return new WaitForSeconds(intervalSeconds);
             }
-        }    
+        }
     }
 
     IEnumerator HandObjectiveAnimation()
@@ -421,7 +421,7 @@ public class ManagerClosedLoop : MonoBehaviour
     {
         lblTrialsCount.text = $"Trials: {SessionControl.trlProgression}/{SessionControl.numTotalTrials}";
 
-        if(SessionControl.trlProgression > 0)
+        if (SessionControl.trlProgression > 0)
         {
             lblAccuracy.text = $"Accuracy: {SessionControl.numTrialsCorrect}/{SessionControl.trlProgression} " +
                 $"({(SessionControl.trlProgression > 0 ? Mathf.Round(SessionControl.numTrialsCorrect / (float)SessionControl.trlProgression * 100) : 0)}%)";
@@ -432,7 +432,7 @@ public class ManagerClosedLoop : MonoBehaviour
         }
     }
 
-    void RegisterEvent(string eventVal, int? eventID=null)
+    void RegisterEvent(string eventVal, int? eventID = null)
     {
         TcpServerManager.Instance.SendMessageToClient(eventVal, eventID);
     }

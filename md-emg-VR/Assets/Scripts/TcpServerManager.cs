@@ -35,7 +35,7 @@ public class TcpServerManager : MonoBehaviour
     void Start()
     {
         // Load configs
-        string configPath = Path.Combine(Application.dataPath, "config");
+        string configPath = Path.Combine(Application.dataPath, "Config");
 
         string json = File.ReadAllText(Path.Combine(configPath, "TCPServerConfig.json"));
         TCPServerConfig serverConfig = JsonUtility.FromJson<TCPServerConfig>(json);
@@ -91,7 +91,8 @@ public class TcpServerManager : MonoBehaviour
                 TCPEvent eventData = JsonUtility.FromJson<TCPEvent>(msg_received.TrimEnd('\n'));
 
                 // Notify listeners on the main thread
-                UnityMainThreadDispatcher.Instance().Enqueue(() => {
+                UnityMainThreadDispatcher.Instance().Enqueue(() =>
+                {
                     OnMessageReceived?.Invoke(eventData);
                 });
             }
@@ -118,10 +119,12 @@ public class TcpServerManager : MonoBehaviour
         {
             string json;
 
-            if (msgID.HasValue) {
+            if (msgID.HasValue)
+            {
                 json = $"{{\"event\":\"{msg}\",\"event_id\":{msgID.Value}}}\n";
             }
-            else {
+            else
+            {
                 json = $"{{\"event\":\"{msg}\"}}\n";
             }
 
