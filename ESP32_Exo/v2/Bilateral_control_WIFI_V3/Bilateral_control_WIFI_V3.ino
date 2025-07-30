@@ -150,14 +150,14 @@ const char *html_page = R"rawliteral(
             <h3>Gesture Control</h3>
             <div class="button-group">
                 <button class="btn-primary" onclick="setGesture(0)">Relax</button>
-                <button class="btn-primary" onclick="setGesture(1)">All Flex</button>
-                <button class="btn-primary" onclick="setGesture(2)">All Extend</button>
-                <button class="btn-primary" onclick="setGesture(3)">2-Finger Pinch</button>
-                <button class="btn-primary" onclick="setGesture(4)">3-Finger Pinch</button>
-                <button class="btn-primary" onclick="setGesture(5)">Thumb</button>
-                <button class="btn-primary" onclick="setGesture(6)">Index</button>
-                <button class="btn-primary" onclick="setGesture(7)">Middle</button>
-                <button class="btn-primary" onclick="setGesture(8)">Peace</button>
+                <button class="btn-primary" onclick="setGesture(1)">HandClose</button>
+                <button class="btn-primary" onclick="setGesture(2)">HandOpen</button>
+                <button class="btn-primary" onclick="setGesture(3)">HookGrasp</button>
+                <button class="btn-primary" onclick="setGesture(4)">LateralGrasp</button>
+                <button class="btn-primary" onclick="setGesture(5)">ThumbFlexion</button>
+                <button class="btn-primary" onclick="setGesture(6)">IndexFlexion</button>
+                <button class="btn-primary" onclick="setGesture(7)">MRPFlexion</button>
+                <button class="btn-primary" onclick="setGesture(8)">IndexPointing</button>
             </div>
         </div>
 
@@ -200,7 +200,7 @@ const char *html_page = R"rawliteral(
     </div>
 
     <script>
-        const gestureNames = ["Relax", "All Flex", "All Extend", "2-Finger Pinch", "3-Finger Pinch", "Thumb", "Index", "Middle", "Peace"];
+        const gestureNames = ["Relax", "HandClose", "HandOpen", "HookGrasp", "LateralGrasp", "ThumbFlexion", "IndexFlexion", "MRPFlexion", "IndexPointing"];
         
         function updateStatus() {
             fetch('/status')
@@ -714,9 +714,6 @@ void gestureToFingerStates()
 
         switch (gesture)
         {
-        case 0:
-            finger_states = "000000";
-            break; // Relax
         case 1:
             finger_states = "111110";
             break; // All flex
@@ -743,7 +740,7 @@ void gestureToFingerStates()
             break; // Index Pointing
         default:
             finger_states = "000000";
-            break;
+            break; // Relax state
         }
         status_changed = true;
     }
