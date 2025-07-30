@@ -2,7 +2,7 @@ import time
 import json
 from collections import deque
 
-def ControlLoop(events_socket, control_params, pred_control_queue, stop_program):
+def ControlLoop(events_socket, control_params, pred_control_queue, stop_program, pred_esp32_queue=None):
     print('Starting the control loop...')
     
     # variables initialization
@@ -25,6 +25,13 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program)
             # print debug information
             pred_prob = data[1] # prediction probability            
             print(f"pred: {pred} - prob: {pred_prob:.2f} (time interval: {rcv_time - last_ts:.3f}s)")
+
+            # Send prediction to ESP32 queue if available
+            if pred_esp32_queue is not None:
+                try:
+                    pred_esp32_queue.put_nowait(data)  # Send prediction data to ESP32 controller
+                except:
+                    pass  # Queue might be full, skip this prediction
 
             if use_consec_pred:
                 last_predictions.append(pred)

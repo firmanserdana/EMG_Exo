@@ -61,4 +61,7 @@ def acquisition_arg_parser(description=None):
     parser.add_argument('--is_mvc_session', type=int, default=0,
                         help='Is Maximum Voluntary Contraction (MVC) session flag (default: 0)')
 
+    parser.add_argument('--esp32_enabled', type=int, default=None,
+                        help='Enable ESP32 glove control (0/1). If not specified, uses config file setting.')
+
     return parser.parse_args()

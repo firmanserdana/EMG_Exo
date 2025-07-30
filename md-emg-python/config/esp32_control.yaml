@@ -1,0 +1,65 @@
+# ESP32 Glove Configuration
+# Configuration for ESP32-based pneumatic glove control system
+
+# Network settings
+ip_address: "172.20.10.5" # ESP32 IP address
+port: 4210 # TCP port for communication
+timeout: 5 # Connection timeout in seconds
+
+# Control settings
+enabled: false # Enable/disable ESP32 control
+gesture_hold_time: 0.5 # Minimum time between gesture changes (seconds)
+
+# Default pressure settings (0-100)
+default_pressure:
+  flexion: 60 # Default flexion pressure
+  extension: 40 # Default extension pressure
+
+# Default speed setting (0-4)
+default_speed: 2 # Default speed level (0=Stop, 1=Slow, 2=Medium, 3=Fast, 4=Fastest)
+
+# Gesture mapping from EMG predictions to ESP32 gestures
+# This maps the output classes from your trained models to ESP32 gesture IDs
+# Mapping follows Unity VR OpenLoopConfig.json gesture definitions
+
+# Open/Close task mapping (graspIDOpenClose: [0, 1])
+gesture_mapping_open_close:
+  0: 0 # HandOpen -> ESP32 Relax/Open
+  1: 1 # HandClose -> ESP32 All Flex/Close
+
+# Grasp Patterns task mapping (graspIDGraspPatterns: [0, 2, 3, 4])
+gesture_mapping_grasp_patterns:
+  0: 0 # HandOpen -> ESP32 Relax/Open
+  2: 3 # HookGrasp -> ESP32 2-Finger Pinch
+  3: 4 # LateralGrasp -> ESP32 3-Finger Pinch
+  4: 6 # IndexPointing -> ESP32 Index
+
+# Single Fingers task mapping (graspIDSingleFingers: [0, 5, 6, 7])
+gesture_mapping_single_fingers:
+  0: 0 # HandOpen -> ESP32 Relax/Open
+  5: 5 # ThumbFlexion -> ESP32 Thumb
+  6: 6 # IndexFlexion -> ESP32 Index
+  7: 7 # MRPFlexion -> ESP32 Middle
+
+# Default gesture mapping (backwards compatibility)
+gesture_mapping:
+  0: 0 # Rest/Relax -> ESP32 Relax
+  1: 1 # Fist/Grasp -> ESP32 All Flex
+  2: 3 # HookGrasp -> ESP32 2-Finger Pinch
+  3: 4 # LateralGrasp -> ESP32 3-Finger Pinch
+  4: 6 # IndexPointing -> ESP32 Index
+  5: 5 # ThumbFlexion -> ESP32 Thumb
+  6: 6 # IndexFlexion -> ESP32 Index
+  7: 7 # MRPFlexion -> ESP32 Middle
+  8: 8 # Peace -> ESP32 Peace
+
+# Auto-discovery settings
+auto_discovery:
+  enabled: false # Enable automatic ESP32 discovery
+  ip_range: "192.168.1.1-254" # IP range to scan
+  scan_timeout: 1 # Timeout per IP during scan
+
+# Debug settings
+debug:
+  log_commands: true # Log all commands sent to ESP32
+  log_responses: true # Log all responses from ESP32
