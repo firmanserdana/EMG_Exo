@@ -1,0 +1,18 @@
+subj_identifier: "S1" # the unique identifier for the subject
+sleeve: true # true if the EMG sleeve is used, false if bipolar electrodes are used
+
+task_open_close:
+  sessions_open_loop: [00] # valid sessions numbers in open-loop modality
+  sessions_closed_loop: [0] # valid sessions numbers in closed-loop modality
+  model_type: "LSTM"
+  seq_len: 5
+task_grasp_patterns:
+  sessions_open_loop: [] # valid sessions numbers in open-loop modality
+  sessions_closed_loop: [] # valid sessions numbers in closed-loop modality
+  model_type: "LSTM"
+  seq_len: 5
+task_single_fingers:
+  sessions_open_loop: [0, 2, 3] # valid sessions numbers in open-loop modality
+  sessions_closed_loop: [4] # valid sessions numbers in closed-loop modality
+  model_type: "LSTM"
+  seq_len: 5

@@ -22,7 +22,7 @@ def main():
     print("Starting Unity event listener...")
 
     host = '127.0.0.1'
-    port = 56000
+    port = 55000
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     print(f"Waiting for Unity server at {host}:{port} (Ctrl+C to stop)...")
