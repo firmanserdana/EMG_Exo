@@ -68,7 +68,14 @@ def create_events_df(events, time_start):
     events_df = []
 
     for event in events:
-        event_type = event[0]
+        # Handle both old tuple format and new dictionary format
+        if isinstance(event, dict):
+            event_type = event.get('event_type', '')
+            timestamp = event.get('timestamp', 0)
+        else:
+            # Legacy tuple format: (event_type, timestamp)
+            event_type = event[0]
+            timestamp = event[1]
 
         # Check if event_type matches 'grasp_start_{id}'
         match = re.match(r'(grasp_start|grasp_objective_start|grasp_decoded|trial_result)_(\d+)', event_type)
@@ -82,7 +89,7 @@ def create_events_df(events, time_start):
         event_data = {
             'event_type': event_type,
             'event_id': event_id,
-            'time': event[1] - time_start
+            'time': timestamp - time_start
         }
 
         events_df.append(event_data)

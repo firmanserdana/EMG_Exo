@@ -30,32 +30,39 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
             if pred_esp32_queue is not None:
                 try:
                     pred_esp32_queue.put_nowait(data)  # Send prediction data to ESP32 controller
+                    print(f"Sent prediction {pred} to ESP32 queue")
                 except:
-                    pass  # Queue might be full, skip this prediction
+                    print("ESP32 queue full, skipping prediction")
 
             if use_consec_pred:
                 last_predictions.append(pred)
+                print(f"Consecutive predictions buffer: {list(last_predictions)}")
 
             if pred > 0: # check that the prediction is not the rest class
-                pred -= 1 # adjust prediction to match the event ID (assuming 0 is rest class)
+                pred_adjusted = pred # No adjustment needed - use prediction directly
+                print(f"Non-rest prediction detected: {pred} -> event ID: {pred_adjusted}")
                 
                 if use_consec_pred:
                     # check if the last consecutive predictions are the same
                     if len(last_predictions) == num_consec_pred and all(p == last_predictions[0] for p in last_predictions):
                         event = {
                             "eventName": "grasp_decoded",
-                            "eventID": int(pred),
+                            "eventID": int(pred_adjusted),
                         }
 
-                        events_socket.sendall(json.dumps(event).encode())
+                        print(f"Sending Unity event: {event}")
+                        events_socket.sendall((json.dumps(event) + '\n').encode())
                         last_predictions.clear()  # clear the last predictions after sending the event
                 else:
                     event = {
                         "eventName": "grasp_decoded",
-                        "eventID": int(pred),
+                        "eventID": int(pred_adjusted),
                     }
 
-                    events_socket.sendall(json.dumps(event).encode())
+                    print(f"Sending Unity event: {event}")
+                    events_socket.sendall((json.dumps(event) + '\n').encode())
+            else:
+                print(f"Rest class prediction: {pred} - not sending to Unity")
 
             last_ts = rcv_time  # update the last timestamp
         else:

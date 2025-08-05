@@ -720,12 +720,12 @@ python emg_control_64.py --decoding-active 1 --esp32-enabled 1
 
 # Full parameter specification
 python emg_control_64.py \
-  --subj-type healthy \
+  --subj_type healthy \
   --subj 0 \
-  --task grasp_patterns \
-  --decoding-active 1 \
-  --acquisition-type open_loop \
-  --esp32-enabled 1 \
+  --task open_close \
+  --decoding_active 1 \
+  --acquisition_type closed_loop \
+  --esp32_enabled 1 \
   --session 0
 ```
 

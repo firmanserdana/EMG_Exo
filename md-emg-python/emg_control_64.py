@@ -342,6 +342,12 @@ if __name__ == "__main__":
     with open(events_filename, 'wb') as f:
         pickle.dump(event_items, f)
 
+    # print events list
+    print("\nEvents saved:")
+    for event in event_items:
+        print(f"  - {event['timestamp']}: {event['event_type']} ({event.get('data', '')})")
+    print(f"Events saved to {events_filename}")
+
     print("Events saved")
 
     time.sleep(2) # sleep for allowing the threads to complete the saving

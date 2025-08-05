@@ -57,51 +57,49 @@ def dataset_preration(subj_type, subj, task, acquisition_type, session):
 
     # open loop data
     if acquisition_type == 'open_loop' or acquisition_type == 'both':
-        if len(subj_cfg[f'task_{task}']['sessions_open_loop'][session]) > 0:
-            for block_id in subj_cfg[f'task_{task}']['sessions_open_loop'][session]:
-                print(f'- Processing open loop block {block_id} for task {task} (session {session})')
+        if session in subj_cfg[f'task_{task}']['sessions_open_loop']:
+            print(f'- Processing open loop session {session} for task {task}')
 
-                neural_features, labels, labels_encoder = extract_neural_features(
-                    data_file=os.path.join(data_folder_src, f'session_{block_id:02d}.npy'),
-                    events_file=os.path.join(data_folder_src, f'session_{block_id:02d}_events.pkl'),
-                    emg_proc_cfg=emg_proc_cfg,
-                    features_cfg=features_cfg,
-                    mvc_file=mvc_file,
-                    add_hand_open_class=add_hand_open_class,
-                    add_rest_class=add_rest_class,
-                    labels_encoder=labels_encoder,
-                    acq_type='open_loop',
-                    seq_len=seq_len
-                ) 
-            
-                total_neural_features.append(neural_features)
-                total_labels.append(labels)
+            neural_features, labels, labels_encoder = extract_neural_features(
+                data_file=os.path.join(data_folder_src, f'session_{session:02d}.npy'),
+                events_file=os.path.join(data_folder_src, f'session_{session:02d}_events.pkl'),
+                emg_proc_cfg=emg_proc_cfg,
+                features_cfg=features_cfg,
+                mvc_file=mvc_file,
+                add_hand_open_class=add_hand_open_class,
+                add_rest_class=add_rest_class,
+                labels_encoder=labels_encoder,
+                acq_type='open_loop',
+                seq_len=seq_len
+            ) 
 
-                num_features += len(neural_features)
+            total_neural_features.append(neural_features)
+            total_labels.append(labels)
+
+            num_features += len(neural_features)
 
     # closed loop data
     if acquisition_type == 'closed_loop' or acquisition_type == 'both':
         closed_loop_start_idx = num_features
 
-        if len(subj_cfg[f'task_{task}']['sessions_closed_loop'][session]) > 0:
-            for block_id in subj_cfg[f'task_{task}']['sessions_closed_loop'][session]:
-                print(f'- Processing closed loop block {block_id} for task {task} (session {session})')
+        if session in subj_cfg[f'task_{task}']['sessions_closed_loop']:
+            print(f'- Processing closed loop session {session} for task {task}')
 
-                neural_features, labels, _ = extract_neural_features(
-                    data_file=os.path.join(data_folder_src, f'session_{block_id:02d}.npy'),
-                    events_file=os.path.join(data_folder_src, f'session_{block_id:02d}_events.pkl'),
-                    emg_proc_cfg=emg_proc_cfg,
-                    features_cfg=features_cfg,
-                    mvc_file=mvc_file,
-                    add_hand_open_class=add_hand_open_class,
-                    add_rest_class=add_rest_class,
-                    labels_encoder=labels_encoder,
-                    acq_type='closed_loop',
-                    seq_len=seq_len
-                ) 
-            
-                total_neural_features.append(neural_features)
-                total_labels.append(labels)
+            neural_features, labels, _ = extract_neural_features(
+                data_file=os.path.join(data_folder_src, f'session_{session:02d}.npy'),
+                events_file=os.path.join(data_folder_src, f'session_{session:02d}_events.pkl'),
+                emg_proc_cfg=emg_proc_cfg,
+                features_cfg=features_cfg,
+                mvc_file=mvc_file,
+                add_hand_open_class=add_hand_open_class,
+                add_rest_class=add_rest_class,
+                labels_encoder=labels_encoder,
+                acq_type='closed_loop',
+                seq_len=seq_len
+            ) 
+
+            total_neural_features.append(neural_features)
+            total_labels.append(labels)
 
     if len(total_neural_features) == 0:
         raise ValueError(f'No sessions data found for task {task}.')

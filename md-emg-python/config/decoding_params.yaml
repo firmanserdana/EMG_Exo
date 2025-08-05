@@ -1,5 +1,5 @@
 buffer_predictions_size: 50 # size of the buffer used to store the predictions of the model
 
 # whether to use the min number of consecutive predictions to decide the final prediction
-use_consec_pred: True
+use_consec_pred: false
 num_consec_pred: 5 # number of consecutive predictions to consider for the final prediction

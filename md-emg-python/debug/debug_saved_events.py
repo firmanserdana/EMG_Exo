@@ -6,9 +6,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.data_utils import *
 
 # General params
-subj_type = 'SCI' # 'healthy' or 'SCI'
-subj = 4
-session = None # session number to load - None if load all sessions
+subj_type = 'healthy' # 'healthy' or 'SCI'
+subj = 0
+session = 10 # session number to load - None if load all sessions
 
 subj_id = f'S{subj}'
 

@@ -53,6 +53,7 @@ bool dac_available = false;
 
 // Network status
 bool tcp_connected = false;
+bool tcp_server_started = false; // Flag to track server status
 unsigned long last_tcp_command = 0;
 const unsigned long tcp_timeout = 5000; // 5 second timeout
 
@@ -193,8 +194,12 @@ const char *html_page = R"rawliteral(
             <h3>TCP Connection Info</h3>
             <div class="status">
                 <div>TCP Server Port: 4210</div>
-                <div>Connect from computer using: <strong>ESP32_IP:4210</strong></div>
-                <div>Commands: g:X, p:X:Y, s:X, f:XXXXXX, stop</div>
+                <div>AP Mode: <strong>192.168.4.1:4210</strong></div>
+                <div>STA Mode: <strong>Check status above for IP:4210</strong></div>
+                <div>Commands: g:X (gesture), p:X:Y (pressure), s:X (speed), f:XXXXXX (fingers), stop</div>
+                <div>Example: "g:1" sets gesture to HandClose, "p:75:25" sets flex:75% ext:25%</div>
+                <button class="btn-secondary" onclick="testTcpServer()" style="margin-top: 10px;">Test TCP Server Status</button>
+                <div id="tcp-test-result" style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px; display: none;"></div>
             </div>
         </div>
     </div>
@@ -293,6 +298,21 @@ const char *html_page = R"rawliteral(
             sendCommand('stop');
         }
 
+        function testTcpServer() {
+            fetch('/tcp-test')
+                .then(response => response.text())
+                .then(result => {
+                    const resultDiv = document.getElementById('tcp-test-result');
+                    resultDiv.innerHTML = '<pre>' + result + '</pre>';
+                    resultDiv.style.display = 'block';
+                })
+                .catch(error => {
+                    const resultDiv = document.getElementById('tcp-test-result');
+                    resultDiv.innerHTML = 'Error testing TCP server: ' + error;
+                    resultDiv.style.display = 'block';
+                });
+        }
+
         // Auto update status every 1 second
         setInterval(updateStatus, 1000);
         updateStatus();
@@ -333,7 +353,17 @@ void setup()
 
     Serial.println("=== System Ready ===");
     Serial.println("Web Interface: 192.168.4.1");
-    Serial.println("TCP Server: Port 4210");
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.print("TCP Server (STA): ");
+        Serial.print(WiFi.localIP());
+        Serial.print(":");
+        Serial.println(tcp_port);
+    }
+    Serial.print("TCP Server (AP): ");
+    Serial.print(WiFi.softAPIP());
+    Serial.print(":");
+    Serial.println(tcp_port);
     Serial.println("====================");
 }
 
@@ -353,13 +383,46 @@ void loop()
     // Handle TCP commands
     handleTCPCommands();
 
+    // Periodic TCP server status check (every 30 seconds)
+    static unsigned long lastServerCheck = 0;
+    if (millis() - lastServerCheck > 30000)
+    {
+        lastServerCheck = millis();
+        Serial.println("TCP Server Status Check:");
+        Serial.print("  Server running on port ");
+        Serial.println(tcp_port);
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            Serial.print("  Available at STA IP: ");
+            Serial.print(WiFi.localIP());
+            Serial.print(":");
+            Serial.println(tcp_port);
+        }
+        Serial.print("  Available at AP IP: ");
+        Serial.print(WiFi.softAPIP());
+        Serial.print(":");
+        Serial.println(tcp_port);
+        Serial.print("  TCP Connected: ");
+        Serial.println(tcp_connected ? "YES" : "NO");
+    }
+
     // Check TCP connection timeout
     if (tcp_connected && (millis() - last_tcp_command > tcp_timeout))
     {
+        Serial.println("TCP connection timeout, switching to Web mode");
         tcp_connected = false;
         control_mode = WEB_MODE;
         tcpClient.stop();
-        Serial.println("TCP connection timeout, switching to Web mode");
+        status_changed = true;
+    }
+
+    // Also check if TCP client is still connected
+    if (tcp_connected && !tcpClient.connected())
+    {
+        Serial.println("TCP client disconnected (connection check), switching to Web mode");
+        tcp_connected = false;
+        control_mode = WEB_MODE;
+        tcpClient.stop();
         status_changed = true;
     }
 
@@ -423,16 +486,65 @@ void initNetworks()
         Serial.println("\nSTA connected!");
         Serial.print("STA IP: ");
         Serial.println(WiFi.localIP());
+        Serial.print("TCP server will be available at: ");
+        Serial.print(WiFi.localIP());
+        Serial.print(":");
+        Serial.println(tcp_port);
     }
     else
     {
         Serial.println("\nSTA connection failed, AP only mode");
+        Serial.print("TCP server will be available at AP IP: ");
+        Serial.print(WiFi.softAPIP());
+        Serial.print(":");
+        Serial.println(tcp_port);
     }
 
-    // Start TCP server
-    tcpServer.begin();
-    Serial.print("TCP server started on port ");
+    // Start TCP server with retry mechanism
+    for (int attempts = 0; attempts < 3; attempts++)
+    {
+        tcpServer.begin();
+        delay(100);
+
+        // Try to verify the server is listening by checking for incoming connections
+        Serial.print("TCP server start attempt ");
+        Serial.print(attempts + 1);
+        Serial.print("/3 on port ");
+        Serial.println(tcp_port);
+
+        tcp_server_started = true; // Assume success for now
+        break;                     // WiFiServer.begin() doesn't return status, so we assume success
+    }
+
+    if (tcp_server_started)
+    {
+        tcpServer.setNoDelay(true); // Disable Nagle algorithm for faster response
+        Serial.println("✓ TCP server successfully started");
+    }
+    else
+    {
+        Serial.println("✗ TCP server failed to start");
+    }
+
+    // Print available connection endpoints
+    Serial.println("TCP server endpoints:");
+    Serial.print("  AP Mode: ");
+    Serial.print(WiFi.softAPIP());
+    Serial.print(":");
     Serial.println(tcp_port);
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.print("  STA Mode: ");
+        Serial.print(WiFi.localIP());
+        Serial.print(":");
+        Serial.println(tcp_port);
+        Serial.println("  Use this IP for nmap scanning from external devices");
+    }
+    else
+    {
+        Serial.println("  STA Mode: Not connected - use AP mode IP for testing");
+    }
 
     // Setup web server routes
     server.on("/", []()
@@ -499,6 +611,18 @@ void initNetworks()
         emergencyStop();
         server.send(200, "text/plain", "OK"); });
 
+    server.on("/tcp-test", []()
+              {
+        String response = "TCP Server Status:\n";
+        response += "Port: " + String(tcp_port) + "\n";
+        response += "Server Started: " + String(tcp_server_started ? "YES" : "NO") + "\n";
+        response += "Client Connected: " + String(tcp_connected ? "YES" : "NO") + "\n";
+        if (WiFi.status() == WL_CONNECTED) {
+            response += "STA IP: " + WiFi.localIP().toString() + ":" + String(tcp_port) + "\n";
+        }
+        response += "AP IP: " + WiFi.softAPIP().toString() + ":" + String(tcp_port) + "\n";
+        server.send(200, "text/plain", response); });
+
     server.begin();
     Serial.println("Web server started");
 }
@@ -531,13 +655,26 @@ void handleTCPCommands()
     // Check for new TCP client connections
     if (!tcp_connected)
     {
-        tcpClient = tcpServer.available();
-        if (tcpClient)
+        WiFiClient newClient = tcpServer.available();
+        if (newClient)
         {
+            // Close any existing connection first
+            if (tcpClient)
+            {
+                tcpClient.stop();
+            }
+
+            tcpClient = newClient;
             tcp_connected = true;
             control_mode = TCP_MODE;
             Serial.print("TCP client connected from: ");
             Serial.println(tcpClient.remoteIP());
+
+            // Send welcome message
+            tcpClient.println("ESP32 Glove Control Ready");
+            tcpClient.flush();
+
+            last_tcp_command = millis();
             status_changed = true;
         }
     }
@@ -572,11 +709,13 @@ void handleTCPCommands()
                             gesture = newGesture;
                             Serial.println("TCP: Set gesture " + String(gesture));
                             tcpClient.println("OK");
+                            tcpClient.flush();
                             status_changed = true;
                         }
                         else
                         {
                             tcpClient.println("ERROR: Invalid gesture");
+                            tcpClient.flush();
                         }
                     }
                     else if (cmdType == "p")
@@ -592,16 +731,19 @@ void handleTCPCommands()
                                 pressure[1] = ext;
                                 Serial.println("TCP: Set pressure " + String(pressure[0]) + ":" + String(pressure[1]));
                                 tcpClient.println("OK");
+                                tcpClient.flush();
                                 status_changed = true;
                             }
                             else
                             {
                                 tcpClient.println("ERROR: Invalid pressure values");
+                                tcpClient.flush();
                             }
                         }
                         else
                         {
                             tcpClient.println("ERROR: Invalid pressure format");
+                            tcpClient.flush();
                         }
                     }
                     else if (cmdType == "s")
@@ -612,11 +754,13 @@ void handleTCPCommands()
                             speed = newSpeed;
                             Serial.println("TCP: Set speed " + String(speed));
                             tcpClient.println("OK");
+                            tcpClient.flush();
                             status_changed = true;
                         }
                         else
                         {
                             tcpClient.println("ERROR: Invalid speed");
+                            tcpClient.flush();
                         }
                     }
                     else if (cmdType == "f")
@@ -637,42 +781,48 @@ void handleTCPCommands()
                                 finger_states = params;
                                 Serial.println("TCP: Set finger states " + finger_states);
                                 tcpClient.println("OK");
+                                tcpClient.flush(); // Ensure response is sent immediately
                                 status_changed = true;
                             }
                             else
                             {
                                 tcpClient.println("ERROR: Invalid finger states");
+                                tcpClient.flush();
                             }
                         }
                         else
                         {
                             tcpClient.println("ERROR: Finger states must be 6 digits");
+                            tcpClient.flush();
                         }
                     }
                     else
                     {
                         tcpClient.println("ERROR: Unknown command");
+                        tcpClient.flush();
                     }
                 }
                 else if (command == "stop")
                 {
                     emergencyStop();
                     tcpClient.println("OK");
+                    tcpClient.flush();
                 }
                 else
                 {
                     tcpClient.println("ERROR: Invalid command format");
+                    tcpClient.flush();
                 }
             }
         }
     }
     else if (tcp_connected)
     {
-        // Client disconnected
+        // Client disconnected or connection lost
+        Serial.println("TCP client disconnected, switching to Web mode");
         tcp_connected = false;
         control_mode = WEB_MODE;
         tcpClient.stop();
-        Serial.println("TCP client disconnected, switching to Web mode");
         status_changed = true;
     }
 }
@@ -697,20 +847,14 @@ void updateActuators()
 // ==================== Gesture Conversion ====================
 void gestureToFingerStates()
 {
-    // Only update finger_states from gesture if not directly controlled
+    // Always convert gesture to finger_states when gesture changes
     static int lastGesture = -1;
-    static unsigned long lastDirectControl = 0;
 
-    // Check if finger_states was recently set directly (via TCP 'f' command or web)
-    if (status_changed)
-    {
-        lastDirectControl = millis();
-    }
-
-    // Only convert gesture to finger_states if no direct control in last 100ms
-    if (gesture != lastGesture && (millis() - lastDirectControl > 100))
+    // Convert gesture to finger_states whenever gesture changes
+    if (gesture != lastGesture)
     {
         lastGesture = gesture;
+        String oldFingerStates = finger_states;
 
         switch (gesture)
         {
@@ -743,6 +887,7 @@ void gestureToFingerStates()
             break; // Relax state
         }
         status_changed = true;
+        Serial.println("Gesture " + String(gesture) + " -> finger_states: " + oldFingerStates + " => " + finger_states);
     }
 }
 

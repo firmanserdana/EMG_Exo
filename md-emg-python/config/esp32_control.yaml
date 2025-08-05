@@ -2,30 +2,33 @@
 # Configuration for ESP32-based pneumatic glove control system
 
 # Network settings
-ip_address: "172.20.10.5" # ESP32 IP address
+ip_address: "172.20.10.3" # ESP32 IP address
 port: 4210 # TCP port for communication
-timeout: 5 # Connection timeout in seconds
+timeout: 10 # Connection timeout in seconds (increased for stability)
 
 # Control settings
-enabled: false # Enable/disable ESP32 control
-gesture_hold_time: 0.5 # Minimum time between gesture changes (seconds)
+enabled: true # Enable/disable ESP32 control
+gesture_hold_time: 0.1 # Minimum time between gesture changes (seconds) - reduced for more responsive testing
+connection_mode: "persistent" # Connection mode: "persistent" (maintain constant connection) or "reconnect" (reconnect as needed)
+heartbeat_interval: 5.0 # Send heartbeat every N seconds to keep connection alive (only for persistent mode)
 
 # Default pressure settings (0-100)
 default_pressure:
-  flexion: 60 # Default flexion pressure
-  extension: 40 # Default extension pressure
+  flexion: 85 # Default flexion pressure (increased for more visible movement)
+  extension: 70 # Default extension pressure (increased for more visible movement)
 
 # Default speed setting (0-4)
-default_speed: 2 # Default speed level (0=Stop, 1=Slow, 2=Medium, 3=Fast, 4=Fastest)
+default_speed: 4 # Default speed level (0=Stop, 1=Slow, 2=Medium, 3=Fast, 4=Fastest) - set to max for testing
 
 # Gesture mapping from EMG predictions to ESP32 gestures
 # This maps the output classes from your trained models to ESP32 gesture IDs
 # Mapping follows Unity VR OpenLoopConfig.json gesture definitions
 
-# Open/Close task mapping (graspIDOpenClose: [0, 1])
+# Open/Close task mapping (graspIDOpenClose: [0, 1, 2])
 gesture_mapping_open_close:
-  0: 0 # HandOpen -> ESP32 Relax/Open
-  1: 1 # HandClose -> ESP32 All Flex/Close
+  0: 2 # HandOpen -> ESP32 Extend (case 2: "222220")
+  1: 1 # HandClose -> ESP32 All Flex (case 1: "111110")
+  2: 1 # HandClose -> ESP32 All Flex (case 1: "111110" - same as class 1)
 
 # Grasp Patterns task mapping (graspIDGraspPatterns: [0, 2, 3, 4])
 gesture_mapping_grasp_patterns:
@@ -41,17 +44,16 @@ gesture_mapping_single_fingers:
   6: 6 # IndexFlexion -> ESP32 Index
   7: 7 # MRPFlexion -> ESP32 Middle
 
-# Default gesture mapping (backwards compatibility)
+# Default gesture mapping (updated to match ESP32 cases)
 gesture_mapping:
-  0: 0 # Rest/Relax -> ESP32 Relax
-  1: 1 # Fist/Grasp -> ESP32 All Flex
-  2: 3 # HookGrasp -> ESP32 2-Finger Pinch
-  3: 4 # LateralGrasp -> ESP32 3-Finger Pinch
-  4: 6 # IndexPointing -> ESP32 Index
-  5: 5 # ThumbFlexion -> ESP32 Thumb
-  6: 6 # IndexFlexion -> ESP32 Index
-  7: 7 # MRPFlexion -> ESP32 Middle
-  8: 8 # Peace -> ESP32 Peace
+  0: 2 # Hand Open -> ESP32 Extend (case 2)
+  1: 1 # Fist -> ESP32 All Flex (case 1)
+  2: 3 # HookGrasp -> ESP32 IMRP Flex (case 3)
+  3: 4 # LateralGrasp -> ESP32 3-Finger Pinch (case 4)
+  4: 8 # IndexPointing -> ESP32 Index Pointing (case 8)
+  5: 5 # ThumbFlexion -> ESP32 Thumb (case 5)
+  6: 6 # IndexFlexion -> ESP32 Index (case 6)
+  7: 7 # MRPFlexion -> ESP32 MRP Flex (case 7)
 
 # Auto-discovery settings
 auto_discovery:

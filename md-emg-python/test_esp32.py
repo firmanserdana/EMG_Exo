@@ -15,8 +15,75 @@ Author: EMG-Exo Control System
 
 import sys
 import time
+import socket
 import argparse
 from realtime_components.esp32_control import ESP32Controller, test_esp32_connection
+
+
+def basic_tcp_test(ip, port, timeout=5):
+    """
+    Basic TCP connectivity test without ESP32Controller overhead
+    
+    Args:
+        ip (str): IP address to test
+        port (int): Port to test
+        timeout (float): Connection timeout
+        
+    Returns:
+        bool: True if basic connection successful
+    """
+    print(f"Basic TCP test to {ip}:{port}...")
+    
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        
+        # Test connection
+        print(f"Connecting to {ip}:{port}...", end=" ")
+        result = sock.connect_ex((ip, port))
+        
+        if result == 0:
+            print("✓ Connected!")
+            
+            # Try to read welcome message
+            try:
+                sock.settimeout(2)  # Short timeout for welcome message
+                welcome = sock.recv(1024).decode().strip()
+                if welcome:
+                    print(f"Server says: {welcome}")
+            except socket.timeout:
+                print("No welcome message received")
+            except:
+                pass
+            
+            # Test basic command
+            print("Testing basic command...", end=" ")
+            try:
+                sock.send(b"g:0\n")  # Send relax command
+                sock.settimeout(3)
+                response = sock.recv(1024).decode().strip()
+                if response:
+                    print(f"Response: {response}")
+                    success = "OK" in response.upper()
+                else:
+                    print("No response")
+                    success = False
+            except Exception as e:
+                print(f"Command failed: {e}")
+                success = False
+            
+            sock.close()
+            return success
+        else:
+            print(f"✗ Connection failed (error {result})")
+            return False
+            
+    except socket.timeout:
+        print("✗ Connection timeout")
+        return False
+    except Exception as e:
+        print(f"✗ Error: {e}")
+        return False
 
 
 def scan_for_esp32(ip_base="192.168.1", start=100, end=110):
@@ -38,12 +105,19 @@ def scan_for_esp32(ip_base="192.168.1", start=100, end=110):
         ip = f"{ip_base}.{i}"
         print(f"Testing {ip}...", end=" ")
         
-        controller = ESP32Controller(ip, timeout=2)
-        if controller.connect():
-            print("✓ Found ESP32!")
-            found_devices.append(ip)
-            controller.disconnect()
-        else:
+        # Use basic TCP test first
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)  # Very short timeout for scanning
+            result = sock.connect_ex((ip, 4210))
+            sock.close()
+            
+            if result == 0:
+                print("✓ Found device!")
+                found_devices.append(ip)
+            else:
+                print("✗")
+        except:
             print("✗")
     
     return found_devices
@@ -61,6 +135,27 @@ def interactive_test():
     
     port_str = input("Enter TCP port (default: 4210): ").strip()
     port = int(port_str) if port_str.isdigit() else 4210
+    
+    # First, test basic TCP connectivity
+    print(f"\nStep 1: Basic TCP connectivity test")
+    print("=" * 40)
+    tcp_success = basic_tcp_test(ip, port)
+    
+    if not tcp_success:
+        print("\n✗ Basic TCP test failed!")
+        print("\nTroubleshooting tips:")
+        print("1. Check if ESP32 is powered on and connected to WiFi")
+        print("2. Verify the IP address (check ESP32 serial output)")
+        print("3. Try AP mode IP: 192.168.4.1")
+        print("4. Check if port 4210 is open on your firewall")
+        print("5. Ensure ESP32 and computer are on same network")
+        return
+    
+    print(f"\n✓ Basic TCP test successful!")
+    
+    # Now test with ESP32Controller
+    print(f"\nStep 2: ESP32Controller test")
+    print("=" * 30)
     
     # Test connection
     if test_esp32_connection(ip, port):
@@ -186,7 +281,19 @@ def main():
         ip = args.command
         port = args.port
         print(f"Testing ESP32 at {ip}:{port}")
-        test_esp32_connection(ip, port)
+        
+        # Run both basic and full tests
+        print(f"\nStep 1: Basic TCP connectivity test")
+        print("=" * 40)
+        tcp_success = basic_tcp_test(ip, port)
+        
+        if tcp_success:
+            print(f"\n✓ Basic TCP test successful!")
+            print(f"\nStep 2: ESP32Controller test")
+            print("=" * 30)
+            test_esp32_connection(ip, port)
+        else:
+            print(f"\n✗ Basic TCP test failed - skipping ESP32Controller test")
     
     else:
         # Interactive mode
