@@ -3,6 +3,7 @@ import threading
 import time
 import numpy as np
 import struct
+import argparse
 
 def server_thread(host, port, stop_event):
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -61,11 +62,19 @@ def listen_to_sender(conn, stop_event):
         except OSError:
             break
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Listen for streamed numpy arrays over TCP")
+    parser.add_argument("--host", default="127.0.0.1", help="Server host to bind")
+    parser.add_argument("--port", type=int, default=55001, help="Server port to bind")
+    return parser.parse_args()
+
+
 def main():
     print("Starting stream listener...")
 
-    host = '127.0.0.1'
-    port = 55001
+    args = parse_args()
+    host = args.host
+    port = args.port
 
     stop_event = threading.Event()
     server = threading.Thread(target=server_thread, args=(host, port, stop_event))

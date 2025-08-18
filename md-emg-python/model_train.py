@@ -39,7 +39,7 @@ load_existing_model = bool(args.load_existing_model)
 subj_id = f'S{subj}'
 
 # prepare dataset
-dataset_preration(subj_type, subj, task, acquisition_type, session)
+dataset_preparation(subj_type, subj, task, acquisition_type, session)
 
 # folders definition
 config_folder = 'config'
@@ -211,7 +211,8 @@ if load_existing_model:
     # loading the model
     print('Loading the model from previous decoding session\n')
     existing_file = os.path.join(models_weights_save_folder, f'{model_type}_open_loop.pth')
-    model = torch.load(existing_file, weights_only=False, map_location=device)
+    # It's recommended to load the state_dict instead of the whole model for better portability
+    model.load_state_dict(torch.load(existing_file, map_location=device))
 
 # model weights initialization
 # model.apply(weights_init)
@@ -225,6 +226,6 @@ results, losses = train_nn_model(model, train_loader, valid_loader, test_loader,
 # results is a pd.dataframe containing details about the training (like the losses) and the final test results
 results.to_csv(os.path.join(models_results_save_folder, f'{model_type}_{acquisition_type}.csv'), index=False)
 
-# Save the trained model
+# Save the trained model's state_dict for better portability
 model_save_path = os.path.join(models_weights_save_folder, f'{model_type}_{acquisition_type}.pth')
-torch.save(model, model_save_path)
+torch.save(model.state_dict(), model_save_path)

@@ -64,4 +64,8 @@ def acquisition_arg_parser(description=None):
     parser.add_argument('--esp32_enabled', type=int, default=None,
                         help='Enable ESP32 glove control (0/1). If not specified, uses config file setting.')
 
+    parser.add_argument('--control_mode', type=str, default='synchronized',
+                        choices=['unity_only', 'esp32_only', 'synchronized'],
+                        help='Control mode: unity_only (ESP32 independent), esp32_only (no Unity events), synchronized (ESP32 follows Unity) (default: synchronized)')
+
     return parser.parse_args()

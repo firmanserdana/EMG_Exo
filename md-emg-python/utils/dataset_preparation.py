@@ -4,25 +4,18 @@ import pickle
 
 from utils.data_utils import *
 
-def dataset_preration(subj_type, subj, task, acquisition_type, session):
+def dataset_preparation(subj_type, subj, task, acquisition_type, session):
     """Prepare dataset for EMG decoding."""
     print(f'Using subject type: {subj_type}, subject: {subj}, task: {task}, acquisition type: {acquisition_type}')
 
-    add_hand_open_class = False
-    add_rest_class = True
-
-    add_hand_open_class = bool(add_hand_open_class) if task in ['grasp_patterns', 'single_fingers'] else True
-
-    subj_id = f'S{subj}'
-
     # folders definition
     config_folder = 'config'
-    data_folder_src = os.path.join('data', subj_type, subj_id, 'raw') # source folder for the data
-    data_folder_mvc = os.path.join('data', subj_type, subj_id, 'mvc') # source folder for the data
-    data_folder_dest = os.path.join('data', subj_type, subj_id) # destination folder for the processed data
+    data_folder_src = os.path.join('data', subj_type, f'S{subj}', 'raw') # source folder for the data
+    data_folder_mvc = os.path.join('data', subj_type, f'S{subj}', 'mvc') # source folder for the data
+    data_folder_dest = os.path.join('data', subj_type, f'S{subj}') # destination folder for the processed data
 
     # file paths
-    subj_config_file = os.path.join('config', 'subjects', subj_type, f'{subj_id}.yaml')
+    subj_config_file = os.path.join('config', 'subjects', subj_type, f'S{subj}.yaml')
     emg_proc_conf_file = os.path.join('config', 'emg_signal_processing.yaml')
     features_conf_file = os.path.join('config', 'features_params.yaml')
 
@@ -35,6 +28,14 @@ def dataset_preration(subj_type, subj, task, acquisition_type, session):
 
     with open(features_conf_file, 'r') as f:
         features_cfg = yaml.safe_load(f)
+
+    add_hand_open_class = features_cfg.get('add_hand_open_class', False)
+    add_rest_class = features_cfg.get('add_rest_class', True)
+
+    if task not in ['grasp_patterns', 'single_fingers']:
+        add_hand_open_class = True
+
+    subj_id = f'S{subj}'
 
     # create folders
     os.makedirs(data_folder_dest, exist_ok=True)
@@ -126,3 +127,8 @@ def dataset_preration(subj_type, subj, task, acquisition_type, session):
     # Save the labels encoder
     with open(dest_labels_enc_file, "wb") as f:
         pickle.dump({'labels_encoder':labels_encoder}, f)
+
+# Backward-compatible alias (correct spelling)
+def dataset_preration(subj_type, subj, task, acquisition_type, session):
+    """Alias for dataset_preparation to maintain backward compatibility."""
+    return dataset_preparation(subj_type, subj, task, acquisition_type, session)

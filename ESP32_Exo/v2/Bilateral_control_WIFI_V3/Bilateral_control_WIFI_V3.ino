@@ -1,8 +1,10 @@
-#include <WiFi.h>
+#include <Adafruit_MCP4728.h>
+#include <ArduinoJson.h>
 #include <WebServer.h>
+#include <WiFi.h>
 #include <WiFiClient.h>
 #include <Wire.h>
-#include <Adafruit_MCP4728.h>
+#include "config.h"
 
 // ==================== Configuration ====================
 // WiFi AP Configuration (for web control)
@@ -10,8 +12,8 @@ const char *ap_ssid = "ESP32_Glove";
 const char *ap_password = "12345678";
 
 // WiFi STA Configuration (connect to computer WiFi)
-const char *sta_ssid = "iFire (2)";      //
-const char *sta_password = "7j@nuari07"; //
+const char *sta_ssid = WIFI_STA_SSID;
+const char *sta_password = WIFI_STA_PASSWORD;
 
 // TCP Configuration
 const int tcp_port = 4210;
@@ -38,11 +40,34 @@ enum ControlMode
 };
 ControlMode control_mode = WEB_MODE;
 
+// Control mode lock settings
+enum ControlModeLock
+{
+    AUTO_MODE,      // Automatic switching based on TCP connection
+    FORCE_WEB_MODE, // Always stay in WEB mode
+    FORCE_TCP_MODE  // Always stay in TCP mode
+};
+ControlModeLock mode_lock = AUTO_MODE;
+
 // Gesture and states
 int gesture = 0;                 // Gesture (0-8)
 int pressure[2] = {50, 50};      // Pressure [flexion, extension] (0-100)
 int speed = 1;                   // Speed (0-4)
 String finger_states = "000000"; // Finger states string
+
+// Data-driven gesture mapping for easier modification
+const char *GESTURE_TO_FINGER_STATES_MAP[] = {
+    "000000", // 0: Relax
+    "111110", // 1: All flex (HandClose)
+    "222220", // 2: All extend (HandOpen)
+    "011110", // 3: IMRP Flexion (HookGrasp)
+    "333000", // 4: 3-finger pinch (LateralGrasp)
+    "100000", // 5: Thumb
+    "010000", // 6: Index
+    "001110", // 7: Middle, Ring, Pinky
+    "121110"  // 8: Index Pointing
+};
+const int NUM_GESTURES = sizeof(GESTURE_TO_FINGER_STATES_MAP) / sizeof(GESTURE_TO_FINGER_STATES_MAP[0]);
 
 // Hardware objects
 WebServer server(80);
@@ -55,7 +80,9 @@ bool dac_available = false;
 bool tcp_connected = false;
 bool tcp_server_started = false; // Flag to track server status
 unsigned long last_tcp_command = 0;
-const unsigned long tcp_timeout = 5000; // 5 second timeout
+const unsigned long tcp_timeout = 20000; // 5 second timeout
+char tcp_command_buffer[256];            // Buffer for incoming TCP commands
+int tcp_buffer_idx = 0;
 
 // Status update flags
 bool status_changed = true;
@@ -144,6 +171,29 @@ const char *html_page = R"rawliteral(
                     <div>Finger States</div>
                     <div class="status-value"><span id="current-fingers">000000</span></div>
                 </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>Control Mode</h3>
+            <div class="status-grid">
+                <div class="status-item">
+                    <div>Current Mode</div>
+                    <div class="status-value"><span id="current-mode">WEB</span></div>
+                </div>
+                <div class="status-item">
+                    <div>Mode Lock</div>
+                    <div class="status-value"><span id="mode-lock-status">AUTO</span></div>
+                </div>
+            </div>
+            <div class="button-group">
+                <button class="btn-secondary" onclick="setControlMode('WEB')">Force WEB Mode</button>
+                <button class="btn-secondary" onclick="setControlMode('TCP')">Force TCP Mode</button>
+                <button class="btn-primary" onclick="setControlMode('AUTO')">Auto Mode</button>
+            </div>
+            <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                <strong>AUTO:</strong> Mode switches automatically when TCP client connects<br>
+                <strong>FORCE:</strong> Mode stays locked regardless of connections
             </div>
         </div>
 
@@ -249,6 +299,10 @@ const char *html_page = R"rawliteral(
                     document.getElementById('current-speed').textContent = data.speed;
                     document.getElementById('current-fingers').textContent = data.finger_states;
                     
+                    // Update control mode status
+                    document.getElementById('current-mode').textContent = data.mode;
+                    document.getElementById('mode-lock-status').textContent = data.mode_lock;
+                    
                     // Update input fields with current values
                     document.getElementById('flex-pressure').value = data.pressure[0];
                     document.getElementById('ext-pressure').value = data.pressure[1];
@@ -298,6 +352,12 @@ const char *html_page = R"rawliteral(
             sendCommand('stop');
         }
 
+        function setControlMode(mode) {
+            sendCommand('mode', `value=${mode}`);
+            // Force immediate status update to reflect changes
+            setTimeout(updateStatus, 200);
+        }
+
         function testTcpServer() {
             fetch('/tcp-test')
                 .then(response => response.text())
@@ -336,9 +396,12 @@ void gestureToFingerStates();
 void setFingerStates();
 void setPressureDAC();
 void setSpeedDAC();
-void emergencyStop();
+void parseAndExecuteTCPCommand(String command);
 
 // ==================== Main Program ====================
+/**
+ * @brief Initializes the system on startup.
+ */
 void setup()
 {
     Serial.begin(115200);
@@ -552,18 +615,27 @@ void initNetworks()
 
     server.on("/status", []()
               {
-        String json = "{";
-        json += "\"mode\":\"" + String(control_mode == TCP_MODE ? "TCP" : "WEB") + "\",";
-        json += "\"sta_connected\":" + String(WiFi.status() == WL_CONNECTED ? "true" : "false") + ",";
-        json += "\"sta_ip\":\"" + WiFi.localIP().toString() + "\",";
-        json += "\"tcp_connected\":" + String(tcp_connected ? "true" : "false") + ",";
-        json += "\"tcp_client_ip\":\"" + (tcp_connected ? tcpClient.remoteIP().toString() : "none") + "\",";
-        json += "\"gesture\":" + String(gesture) + ",";
-        json += "\"pressure\":[" + String(pressure[0]) + "," + String(pressure[1]) + "],";
-        json += "\"speed\":" + String(speed) + ",";
-        json += "\"finger_states\":\"" + finger_states + "\"";
-        json += "}";
-        server.send(200, "application/json", json); });
+        StaticJsonDocument<512> json_doc;
+        char json_buffer[512];
+
+        json_doc["mode"] = (control_mode == TCP_MODE ? "TCP" : "WEB");
+        json_doc["mode_lock"] = (mode_lock == AUTO_MODE ? "AUTO" : 
+                                (mode_lock == FORCE_WEB_MODE ? "FORCE_WEB" : "FORCE_TCP"));
+        json_doc["sta_connected"] = (WiFi.status() == WL_CONNECTED);
+        json_doc["sta_ip"] = WiFi.localIP().toString();
+        json_doc["tcp_connected"] = tcp_connected;
+        json_doc["tcp_client_ip"] = (tcp_connected ? tcpClient.remoteIP().toString() : "none");
+        json_doc["gesture"] = gesture;
+        
+        JsonArray pressure_array = json_doc.createNestedArray("pressure");
+        pressure_array.add(pressure[0]);
+        pressure_array.add(pressure[1]);
+        
+        json_doc["speed"] = speed;
+        json_doc["finger_states"] = finger_states;
+
+        serializeJson(json_doc, json_buffer);
+        server.send(200, "application/json", json_buffer); });
 
     server.on("/gesture", []()
               {
@@ -603,6 +675,37 @@ void initNetworks()
                 Serial.println("Web: Set finger states " + finger_states);
                 status_changed = true;
             }
+        }
+        server.send(200, "text/plain", "OK"); });
+
+    server.on("/mode", []()
+              {
+        if (server.hasArg("value")) {
+            String mode = server.arg("value");
+            mode.toUpperCase();
+            
+            if (mode == "WEB") {
+                mode_lock = FORCE_WEB_MODE;
+                control_mode = WEB_MODE;
+                // Disconnect TCP client if connected
+                if (tcp_connected) {
+                    tcpClient.stop();
+                    tcp_connected = false;
+                }
+                Serial.println("Web: Control mode forced to WEB");
+            }
+            else if (mode == "TCP") {
+                mode_lock = FORCE_TCP_MODE;
+                control_mode = TCP_MODE;
+                Serial.println("Web: Control mode forced to TCP");
+            }
+            else if (mode == "AUTO") {
+                mode_lock = AUTO_MODE;
+                // Let the system decide mode based on current TCP connection
+                control_mode = tcp_connected ? TCP_MODE : WEB_MODE;
+                Serial.println("Web: Control mode set to AUTO");
+            }
+            status_changed = true;
         }
         server.send(200, "text/plain", "OK"); });
 
@@ -653,178 +756,217 @@ void initDAC()
 void handleTCPCommands()
 {
     // Check for new TCP client connections
-    if (!tcp_connected)
+    if (!tcp_connected && tcpServer.hasClient())
     {
-        WiFiClient newClient = tcpServer.available();
-        if (newClient)
+        // Only accept TCP connections if not forced to WEB mode
+        if (mode_lock != FORCE_WEB_MODE)
         {
-            // Close any existing connection first
+            // Close any existing connection first to be safe
             if (tcpClient)
             {
                 tcpClient.stop();
             }
 
-            tcpClient = newClient;
-            tcp_connected = true;
-            control_mode = TCP_MODE;
-            Serial.print("TCP client connected from: ");
-            Serial.println(tcpClient.remoteIP());
+            tcpClient = tcpServer.available();
+            if (tcpClient)
+            {
+                tcp_connected = true;
+                if (mode_lock == AUTO_MODE)
+                {
+                    control_mode = TCP_MODE;
+                }
+                tcp_buffer_idx = 0; // Reset buffer for new client
+                Serial.print("TCP client connected from: ");
+                Serial.println(tcpClient.remoteIP());
 
-            // Send welcome message
-            tcpClient.println("ESP32 Glove Control Ready");
-            tcpClient.flush();
+                // Send welcome message
+                tcpClient.println("ESP32 Glove Control Ready");
+                tcpClient.flush();
 
-            last_tcp_command = millis();
-            status_changed = true;
+                last_tcp_command = millis();
+                status_changed = true;
+            }
+        }
+        else
+        {
+            // Reject TCP connection when forced to WEB mode
+            WiFiClient rejectClient = tcpServer.available();
+            if (rejectClient)
+            {
+                rejectClient.println("ERROR: ESP32 forced to WEB mode, TCP disabled");
+                rejectClient.stop();
+                Serial.println("TCP connection rejected - ESP32 forced to WEB mode");
+            }
         }
     }
 
     // Handle existing TCP client
     if (tcp_connected && tcpClient.connected())
     {
-        if (tcpClient.available())
+        while (tcpClient.available() && tcp_buffer_idx < sizeof(tcp_command_buffer) - 1)
         {
-            String command = tcpClient.readStringUntil('\n');
-            command.trim();
-
-            if (command.length() > 0)
-            {
-                Serial.print("TCP command: ");
-                Serial.println(command);
-
-                last_tcp_command = millis();
-
-                // Parse and execute command
-                int colonIndex = command.indexOf(':');
-                if (colonIndex > 0)
+            char c = tcpClient.read();
+            if (c == '\n')
+            { // Command terminated by newline
+                if (tcp_buffer_idx > 0)
                 {
-                    String cmdType = command.substring(0, colonIndex);
-                    String params = command.substring(colonIndex + 1);
-
-                    if (cmdType == "g")
-                    {
-                        int newGesture = params.toInt();
-                        if (newGesture >= 0 && newGesture <= 8)
-                        {
-                            gesture = newGesture;
-                            Serial.println("TCP: Set gesture " + String(gesture));
-                            tcpClient.println("OK");
-                            tcpClient.flush();
-                            status_changed = true;
-                        }
-                        else
-                        {
-                            tcpClient.println("ERROR: Invalid gesture");
-                            tcpClient.flush();
-                        }
-                    }
-                    else if (cmdType == "p")
-                    {
-                        int colonIndex2 = params.indexOf(':');
-                        if (colonIndex2 > 0)
-                        {
-                            int flex = params.substring(0, colonIndex2).toInt();
-                            int ext = params.substring(colonIndex2 + 1).toInt();
-                            if (flex >= 0 && flex <= 100 && ext >= 0 && ext <= 100)
-                            {
-                                pressure[0] = flex;
-                                pressure[1] = ext;
-                                Serial.println("TCP: Set pressure " + String(pressure[0]) + ":" + String(pressure[1]));
-                                tcpClient.println("OK");
-                                tcpClient.flush();
-                                status_changed = true;
-                            }
-                            else
-                            {
-                                tcpClient.println("ERROR: Invalid pressure values");
-                                tcpClient.flush();
-                            }
-                        }
-                        else
-                        {
-                            tcpClient.println("ERROR: Invalid pressure format");
-                            tcpClient.flush();
-                        }
-                    }
-                    else if (cmdType == "s")
-                    {
-                        int newSpeed = params.toInt();
-                        if (newSpeed >= 0 && newSpeed <= 4)
-                        {
-                            speed = newSpeed;
-                            Serial.println("TCP: Set speed " + String(speed));
-                            tcpClient.println("OK");
-                            tcpClient.flush();
-                            status_changed = true;
-                        }
-                        else
-                        {
-                            tcpClient.println("ERROR: Invalid speed");
-                            tcpClient.flush();
-                        }
-                    }
-                    else if (cmdType == "f")
-                    {
-                        if (params.length() == 6)
-                        {
-                            bool valid = true;
-                            for (int i = 0; i < 6; i++)
-                            {
-                                if (params.charAt(i) < '0' || params.charAt(i) > '3')
-                                {
-                                    valid = false;
-                                    break;
-                                }
-                            }
-                            if (valid)
-                            {
-                                finger_states = params;
-                                Serial.println("TCP: Set finger states " + finger_states);
-                                tcpClient.println("OK");
-                                tcpClient.flush(); // Ensure response is sent immediately
-                                status_changed = true;
-                            }
-                            else
-                            {
-                                tcpClient.println("ERROR: Invalid finger states");
-                                tcpClient.flush();
-                            }
-                        }
-                        else
-                        {
-                            tcpClient.println("ERROR: Finger states must be 6 digits");
-                            tcpClient.flush();
-                        }
-                    }
-                    else
-                    {
-                        tcpClient.println("ERROR: Unknown command");
-                        tcpClient.flush();
-                    }
+                    tcp_command_buffer[tcp_buffer_idx] = '\0'; // Null-terminate the string
+                    parseAndExecuteTCPCommand(String(tcp_command_buffer));
+                    tcp_buffer_idx = 0; // Reset buffer
                 }
-                else if (command == "stop")
-                {
-                    emergencyStop();
-                    tcpClient.println("OK");
-                    tcpClient.flush();
-                }
-                else
-                {
-                    tcpClient.println("ERROR: Invalid command format");
-                    tcpClient.flush();
-                }
+            }
+            else if (c >= 32)
+            { // Ignore other control characters
+                tcp_command_buffer[tcp_buffer_idx++] = c;
             }
         }
     }
     else if (tcp_connected)
     {
         // Client disconnected or connection lost
-        Serial.println("TCP client disconnected, switching to Web mode");
+        Serial.println("TCP client disconnected");
         tcp_connected = false;
-        control_mode = WEB_MODE;
         tcpClient.stop();
+
+        // Only switch to WEB mode if not forced to TCP mode
+        if (mode_lock == AUTO_MODE)
+        {
+            control_mode = WEB_MODE;
+            Serial.println("Switching to Web mode (AUTO mode)");
+        }
+        else if (mode_lock == FORCE_TCP_MODE)
+        {
+            control_mode = TCP_MODE;
+            Serial.println("Staying in TCP mode (FORCE_TCP mode)");
+        }
+        // FORCE_WEB_MODE already handles this in connection logic
+
         status_changed = true;
     }
+}
+
+/**
+ * @brief Parses a command string from TCP and executes it.
+ * @param command The command string to parse.
+ */
+void parseAndExecuteTCPCommand(String command)
+{
+    command.trim();
+    if (command.length() == 0)
+        return;
+
+    Serial.print("TCP command: ");
+    Serial.println(command);
+
+    last_tcp_command = millis();
+
+    // Parse and execute command
+    int colonIndex = command.indexOf(':');
+    if (colonIndex > 0)
+    {
+        String cmdType = command.substring(0, colonIndex);
+        String params = command.substring(colonIndex + 1);
+
+        if (cmdType == "g")
+        {
+            int newGesture = params.toInt();
+            if (newGesture >= 0 && newGesture < NUM_GESTURES)
+            {
+                gesture = newGesture;
+                Serial.println("TCP: Set gesture " + String(gesture));
+                tcpClient.println("OK");
+                status_changed = true;
+            }
+            else
+            {
+                tcpClient.println("ERROR: Invalid gesture");
+            }
+        }
+        else if (cmdType == "p")
+        {
+            int colonIndex2 = params.indexOf(':');
+            if (colonIndex2 > 0)
+            {
+                int flex = params.substring(0, colonIndex2).toInt();
+                int ext = params.substring(colonIndex2 + 1).toInt();
+                if (flex >= 0 && flex <= 100 && ext >= 0 && ext <= 100)
+                {
+                    pressure[0] = flex;
+                    pressure[1] = ext;
+                    Serial.println("TCP: Set pressure " + String(pressure[0]) + ":" + String(pressure[1]));
+                    tcpClient.println("OK");
+                    status_changed = true;
+                }
+                else
+                {
+                    tcpClient.println("ERROR: Invalid pressure values");
+                }
+            }
+            else
+            {
+                tcpClient.println("ERROR: Invalid pressure format");
+            }
+        }
+        else if (cmdType == "s")
+        {
+            int newSpeed = params.toInt();
+            if (newSpeed >= 0 && newSpeed <= 4)
+            {
+                speed = newSpeed;
+                Serial.println("TCP: Set speed " + String(speed));
+                tcpClient.println("OK");
+                status_changed = true;
+            }
+            else
+            {
+                tcpClient.println("ERROR: Invalid speed");
+            }
+        }
+        else if (cmdType == "f")
+        {
+            if (params.length() == 6)
+            {
+                bool valid = true;
+                for (int i = 0; i < 6; i++)
+                {
+                    if (params.charAt(i) < '0' || params.charAt(i) > '3')
+                    {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (valid)
+                {
+                    finger_states = params;
+                    Serial.println("TCP: Set finger states " + finger_states);
+                    tcpClient.println("OK");
+                    status_changed = true;
+                }
+                else
+                {
+                    tcpClient.println("ERROR: Invalid finger states");
+                }
+            }
+            else
+            {
+                tcpClient.println("ERROR: Finger states must be 6 digits");
+            }
+        }
+        else
+        {
+            tcpClient.println("ERROR: Unknown command");
+        }
+    }
+    else if (command == "stop")
+    {
+        emergencyStop();
+        tcpClient.println("OK");
+    }
+    else
+    {
+        tcpClient.println("ERROR: Invalid command format");
+    }
+    tcpClient.flush(); // Ensure response is sent immediately
 }
 
 // ==================== Actuator Update ====================
@@ -847,47 +989,27 @@ void updateActuators()
 // ==================== Gesture Conversion ====================
 void gestureToFingerStates()
 {
-    // Always convert gesture to finger_states when gesture changes
     static int lastGesture = -1;
 
-    // Convert gesture to finger_states whenever gesture changes
     if (gesture != lastGesture)
     {
-        lastGesture = gesture;
         String oldFingerStates = finger_states;
+        lastGesture = gesture;
 
-        switch (gesture)
+        if (gesture >= 0 && gesture < NUM_GESTURES)
         {
-        case 1:
-            finger_states = "111110";
-            break; // All flex
-        case 2:
-            finger_states = "222220";
-            break; // All extend
-        case 3:
-            finger_states = "011110";
-            break; // IMRP Flexion
-        case 4:
-            finger_states = "333000";
-            break; // 3-finger pinch
-        case 5:
-            finger_states = "100000";
-            break; // Thumb
-        case 6:
-            finger_states = "010000";
-            break; // Index
-        case 7:
-            finger_states = "001110";
-            break; // Middle, Ring, Pinky
-        case 8:
-            finger_states = "121110";
-            break; // Index Pointing
-        default:
-            finger_states = "000000";
-            break; // Relax state
+            finger_states = GESTURE_TO_FINGER_STATES_MAP[gesture];
         }
+        else
+        {
+            finger_states = GESTURE_TO_FINGER_STATES_MAP[0]; // Default to Relax
+        }
+
         status_changed = true;
-        Serial.println("Gesture " + String(gesture) + " -> finger_states: " + oldFingerStates + " => " + finger_states);
+        if (finger_states != oldFingerStates)
+        {
+            Serial.println("Gesture " + String(gesture) + " -> finger_states: " + oldFingerStates + " => " + finger_states);
+        }
     }
 }
 

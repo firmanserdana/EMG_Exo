@@ -4,79 +4,81 @@ import json
 
 # Thread for reading the Unity TCP events
 def EventsLoop(events_socket, events_queue, stop_program, decoding_active=False, is_decoding=None):
-    print('Starting the events loop')
-    print(f'Events socket info: {events_socket}')
-    print(f'Socket timeout: {events_socket.gettimeout()}')
+    """
+    Listens for and processes events from a TCP socket (e.g., Unity).
+
+    This loop continuously reads data from the provided socket, parses JSON event
+    messages, and puts them into a queue for other components to process.
+    """
+    print('Starting the events loop...')
     
-    # Ensure socket has proper timeout settings
+    # Set a default timeout to prevent the loop from blocking indefinitely
     if events_socket.gettimeout() is None:
-        events_socket.settimeout(2.0)  # Set 2 second timeout if none set
-        print('Set socket timeout to 2.0 seconds')
+        events_socket.settimeout(1.0)
     
-    buffer = ""  # Initialize buffer outside the loop to handle partial messages
+    buffer = ""
     
-    # reading events loop
     while not stop_program.value:
         try:
+            # Read data from the socket
             data = events_socket.recv(1024)
             if not data:
-                print("No data received from socket")
-                continue
-            
-            print(f"Received raw data: {data}")  # Debug: show raw data
+                # Connection closed by the other end
+                print("Events socket connection closed.")
+                break
 
             timestamp = time.perf_counter()
+            buffer += data.decode('utf-8')
 
-            buffer += data.decode()
-            print(f"Current buffer: {repr(buffer)}")  # Debug: show buffer content
-
+            # Process all complete JSON messages in the buffer
             while '\n' in buffer:
                 event_msg, buffer = buffer.split('\n', 1)
-                print(f"Processing event message: {repr(event_msg)}")  # Debug: show message being processed
+                if not event_msg:
+                    continue
 
                 try:
                     event_json = json.loads(event_msg)
-                    print(f"Parsed JSON: {event_json}")  # Debug: show parsed JSON
+                    event = event_json.get("event")
+                    if not event:
+                        continue
+
+                    # Handle decoding state changes if applicable
+                    if decoding_active and is_decoding is not None:
+                        if event == 'decoding_start':
+                            is_decoding.value = True
+                        elif event == 'decoding_stop':
+                            is_decoding.value = False
+                    
+                    # Prepare event data for the queue
+                    event_data = {
+                        'event_type': event,
+                        'data': event_json.get('data', ''),
+                        'timestamp': timestamp
+                    }
+                    
+                    # Append event_id to event_type if it exists
+                    event_id = event_json.get("event_id")
+                    if event_id is not None:
+                        event_data['event_type'] = f"{event}_{event_id}"
+
+                    events_queue.put(event_data)
+
                 except json.JSONDecodeError:
                     print(f"Received invalid JSON data: {event_msg}")
                     continue
 
-                event = event_json.get("event", "")
-                event_id = event_json.get("event_id")
-                print(f"Event: {event}, Event ID: {event_id}")  # Debug: show extracted event info
-
-                if decoding_active:
-                    if event == 'decoding_start':
-                        is_decoding.value = True
-                    elif event == 'decoding_stop':
-                        is_decoding.value = False
-                
-                event_data = {
-                    'event_type': event,
-                    'data': event_json.get('data', ''),
-                    'timestamp': timestamp
-                }
-
-                if event_id is not None:
-                    event_data['event_type'] = f"{event}_{event_id}"
-
-                print(f"Adding event to queue: {event_data}")  # Debug: show event being queued
-                events_queue.put(event_data)  # Put the received data and timestamp in the queue
         except socket.timeout:
-            print("Socket timeout - no data received")  # Debug: show timeout
-            continue  # Timeout occurred, check stop_program and loop again
-        except KeyboardInterrupt:
-            break
+            # No data received, continue to check the stop_program flag
+            continue
         except OSError as e:
-            # Handle "Resource temporarily unavailable" error on macOS
-            if e.errno == 35:  # EAGAIN/EWOULDBLOCK on macOS
-                print("No data available - continuing")  # Debug: show no data available
-                time.sleep(0.1)  # Brief sleep to prevent busy waiting
+            # Handle non-blocking socket errors
+            if e.errno in [35, 10035]:  # EAGAIN/EWOULDBLOCK
+                time.sleep(0.01) # Brief sleep to prevent busy-waiting
                 continue
-            elif hasattr(e, 'winerror') and e.winerror == 10035:
-                print("No data available - continuing")  # Debug: show no data available
-                continue  # No data available, just try again
-            print(f"Socket error: {e}")
+            print(f"Events loop socket error: {e}")
+            break
+        except Exception as e:
+            print(f"An unexpected error occurred in EventsLoop: {e}")
             break
 
-    print("Events loop stopped")
+    print("Events loop stopped.")

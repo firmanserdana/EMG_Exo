@@ -63,7 +63,7 @@ for optm_config in optm_configurations:
     }
 
     features_cfg['windows_length'] = {
-        f'{optm_config['features']['type']}': optm_config['features']['params']
+        optm_config['features']['type']: optm_config['features']['params']
     }
 
     features_cfg['feature_type'] = optm_config['features']['type']

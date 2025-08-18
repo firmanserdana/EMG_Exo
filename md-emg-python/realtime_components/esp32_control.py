@@ -14,6 +14,28 @@ import json
 import threading
 from queue import Queue, Empty
 
+# Helper function for web requests
+def make_web_request(url, timeout=3):
+    """Make HTTP request with fallback for missing requests module"""
+    try:
+        import requests
+        response = requests.get(url, timeout=timeout)
+        return response.status_code, response.text.strip()
+    except ImportError:
+        # Fall back to urllib if requests is not available
+        try:
+            import urllib.request
+            import urllib.parse
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.getcode(), response.read().decode().strip()
+        except Exception as e:
+            print(f"⚠️  Web request failed: {e}")
+            return None, None
+    except Exception as e:
+        print(f"⚠️  Web request failed: {e}")
+        return None, None
+
 
 class ESP32Controller:
     """ESP32 TCP client for real-time gesture control with persistent connection support"""
@@ -29,6 +51,22 @@ class ESP32Controller:
             connection_mode (str): Connection mode - 'persistent' or 'reconnect'
             heartbeat_interval (float): Heartbeat interval for persistent connections
         """
+        # Validate inputs
+        if not isinstance(esp32_ip, str) or not esp32_ip:
+            raise ValueError("esp32_ip must be a non-empty string")
+        
+        if not isinstance(tcp_port, int) or not (1 <= tcp_port <= 65535):
+            raise ValueError("tcp_port must be an integer between 1 and 65535")
+        
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError("timeout must be a positive number")
+        
+        if connection_mode not in ["persistent", "reconnect"]:
+            raise ValueError("connection_mode must be 'persistent' or 'reconnect'")
+        
+        if not isinstance(heartbeat_interval, (int, float)) or heartbeat_interval <= 0:
+            raise ValueError("heartbeat_interval must be a positive number")
+        
         self.esp32_ip = esp32_ip
         self.tcp_port = tcp_port
         self.timeout = timeout
@@ -100,8 +138,69 @@ class ESP32Controller:
         
         print(f"ESP32 Controller initialized for {self.esp32_ip}:{self.tcp_port} (mode: {self.connection_mode})")
     
+    def check_esp32_status(self):
+        """Check ESP32 current mode and settings via web interface"""
+        try:
+            status_code, response_text = make_web_request(f"http://{self.esp32_ip}/status")
+            if status_code == 200:
+                status = json.loads(response_text)
+                return status
+            else:
+                print(f"⚠️  ESP32 status check failed: HTTP {status_code}")
+                return None
+        except Exception as e:
+            print(f"⚠️  ESP32 status check failed: {e}")
+            return None
+    
+    def is_tcp_mode_allowed(self):
+        """Check if ESP32 allows TCP connections based on its current mode settings"""
+        status = self.check_esp32_status()
+        if status:
+            mode = status.get('mode', 'WEB')
+            mode_lock = status.get('mode_lock', 'AUTO')
+            
+            print(f"ESP32 Status: Mode={mode}, ModeLock={mode_lock}")
+            
+            # Allow TCP connection if:
+            # 1. Mode is already TCP, or
+            # 2. Mode lock is AUTO (allows switching), or  
+            # 3. Mode lock is FORCE_TCP
+            if mode == 'TCP' or mode_lock == 'AUTO' or mode_lock == 'FORCE_TCP':
+                return True, f"TCP allowed (Mode: {mode}, Lock: {mode_lock})"
+            else:
+                return False, f"TCP blocked (Mode: {mode}, Lock: {mode_lock})"
+        else:
+            # If we can't check status, assume it's okay to try
+            print("⚠️  Unable to check ESP32 status, proceeding with TCP attempt")
+            return True, "Status check failed, attempting TCP anyway"
+    
+    def request_tcp_mode(self):
+        """Request ESP32 to switch to TCP mode via web interface"""
+        try:
+            status_code, response_text = make_web_request(f"http://{self.esp32_ip}/mode?value=TCP")
+            if status_code == 200 and response_text == "OK":
+                print("✓ Successfully requested ESP32 to switch to TCP mode")
+                time.sleep(0.5)  # Give ESP32 time to switch
+                return True
+            else:
+                print(f"✗ Failed to request TCP mode: HTTP {status_code}")
+                return False
+        except Exception as e:
+            print(f"✗ Failed to request TCP mode: {e}")
+            return False
+    
     def connect(self):
-        """Connect to ESP32 TCP server"""
+        """Connect to ESP32 TCP server with mode respect"""
+        
+        # First, check if TCP connection is allowed
+        tcp_allowed, reason = self.is_tcp_mode_allowed()
+        if not tcp_allowed:
+            print(f"✗ ESP32 TCP connection not allowed: {reason}")
+            print("  Use the ESP32 web interface to enable TCP mode or set to AUTO mode")
+            return False
+        else:
+            print(f"✓ ESP32 TCP connection allowed: {reason}")
+        
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             
@@ -258,26 +357,39 @@ class ESP32Controller:
                 return True
         return True
     
-    def set_gesture(self, gesture_id):
+    def set_gesture(self, gesture_id, retries=2):
         """
-        Set gesture on ESP32 with simplified, more reliable approach
+        Set gesture on ESP32 with improved reliability and retry logic
         
         Args:
             gesture_id (int): Gesture ID (0-8)
+            retries (int): Number of retries on failure
         """
-        if self.connected and 0 <= gesture_id <= 8:
-            # Use only gesture commands for better reliability
-            # The ESP32 should handle finger states internally based on gesture ID
+        if not (0 <= gesture_id <= 8):
+            print(f"ESP32: Invalid gesture ID {gesture_id}, must be 0-8")
+            return False
             
-            gesture_success = self.send_command(f"g:{gesture_id}")
-            
-            if gesture_success:
-                print(f"ESP32: Sent gesture {gesture_id} (success)")
-                return True
-            else:
-                print(f"ESP32: Failed to send gesture {gesture_id}")
-                return False
+        for attempt in range(retries + 1):
+            if self.connected:
+                # Use only gesture commands for better reliability
+                success = self.send_command(f"g:{gesture_id}")
+                if success:
+                    return True
+                    
+            # If we reach here, the command failed
+            if attempt < retries:
+                print(f"ESP32: Gesture {gesture_id} failed (attempt {attempt + 1}/{retries + 1}), retrying...")
+                # Brief delay before retry
+                time.sleep(0.1)
                 
+                # Try to reconnect if in persistent mode
+                if self.connection_mode == "persistent":
+                    print("ESP32: Attempting reconnection before retry...")
+                    if not self.connect():
+                        print("ESP32: Reconnection failed, skipping remaining retries")
+                        break
+        
+        print(f"ESP32: Failed to set gesture {gesture_id} after {retries + 1} attempts")
         return False
     
     def set_pressure(self, flexion, extension):
@@ -309,13 +421,24 @@ class ESP32Controller:
             return self.send_command("stop")
         return False
     
-    def disconnect(self):
-        """Close connection"""
+    def disconnect(self, restore_auto_mode=False):
+        """Close connection and optionally restore auto mode"""
         try:
             if self.sock:
                 self.sock.close()
             self.connected = False
             print("ESP32 connection closed")
+            
+            # Optionally restore AUTO mode when disconnecting
+            if restore_auto_mode:
+                try:
+                    status_code, response_text = make_web_request(f"http://{self.esp32_ip}/mode?value=AUTO", timeout=2)
+                    if status_code == 200:
+                        print("✓ ESP32 mode restored to AUTO")
+                    else:
+                        print("⚠️  Failed to restore ESP32 to AUTO mode")
+                except:
+                    print("⚠️  Could not restore ESP32 to AUTO mode")
         except:
             pass
 
@@ -365,11 +488,15 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
     connection_retry_time = 0
     connection_retry_interval = 10  # Retry connection every 10 seconds for reconnect mode
     
+    # Queue processing optimization variables
+    queue_flush_interval = 0.05  # Process queue more frequently (20Hz)
+    last_queue_check = 0
+    
     print(f"ESP32 Control Loop: Using {esp32_controller.connection_mode} connection mode")
     if esp32_controller.connection_mode == "persistent":
         print(f"ESP32 Control Loop: Heartbeat interval set to {esp32_controller.heartbeat_interval}s")
     
-    # Main control loop
+    # Main control loop with optimized queue processing
     while not stop_program.value:
         try:
             current_time = time.perf_counter()
@@ -396,12 +523,15 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
                             esp32_controller.set_speed(esp32_params['default_speed'])
                     else:
                         print("ESP32: Persistent reconnection failed, will retry with next command")
-                        # Clear the queue during connection issues to prevent buildup
-                        try:
-                            pred_esp32_queue.get_nowait()
-                        except Empty:
-                            pass
-                        time.sleep(0.1)
+                        # Process queue more aggressively during connection issues to prevent buildup
+                        queue_process_count = 0
+                        while queue_process_count < 5:  # Process up to 5 items quickly
+                            try:
+                                pred_esp32_queue.get_nowait()
+                                queue_process_count += 1
+                            except Empty:
+                                break
+                        time.sleep(0.05)  # Shorter sleep during connection issues
                         continue
             else:
                 # For reconnect mode, use periodic connection checks
@@ -422,54 +552,69 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
                         print("ESP32 reconnection failed")
                     connection_retry_time = current_time
             
-            # Skip processing if not connected 
+            # Skip processing if not connected but still process queue to prevent buildup
             if not esp32_controller.connected:
-                # Clear queue to prevent buildup during disconnection
+                # Clear queue more aggressively to prevent buildup during disconnection
+                queue_process_count = 0
+                while queue_process_count < 10:  # Process up to 10 items quickly
+                    try:
+                        pred_esp32_queue.get_nowait()
+                        queue_process_count += 1
+                    except Empty:
+                        break
+                time.sleep(0.05)
+                continue
+            
+            # Optimized queue processing - check for multiple items
+            predictions_processed = 0
+            max_predictions_per_cycle = 3  # Process multiple predictions per cycle for efficiency
+            
+            while predictions_processed < max_predictions_per_cycle:
                 try:
-                    pred_esp32_queue.get_nowait()
-                except Empty:
-                    pass
-                time.sleep(0.1)
-                continue
-            
-            # Get prediction data with longer timeout to avoid missing data
-            try:
-                data = pred_esp32_queue.get(timeout=0.5)  # Increased timeout from 0.1 to 0.5
-            except Empty:
-                # No prediction data available, continue
-                continue
-            
-            if data is not None:
-                pred = data[0]  # prediction from the model
-                pred_prob = data[1]  # prediction probability
-                
-                # Map EMG prediction to ESP32 gesture
-                esp32_gesture = esp32_controller.gesture_mapping.get(pred, 0)
-                
-                # Always send gesture commands, but apply hold time for different gestures only
-                should_send = True
-                if (esp32_gesture != last_gesture and 
-                    current_time - last_gesture_time < gesture_hold_time):
-                    should_send = False
-                    print(f"ESP32: Gesture {esp32_gesture} within hold time, skipping (EMG pred: {pred}, prob: {pred_prob:.2f})")
-                
-                if should_send:
-                    print(f"ESP32: Setting gesture {esp32_gesture} (EMG pred: {pred}, prob: {pred_prob:.2f})")
+                    # Use non-blocking get for rapid processing
+                    data = pred_esp32_queue.get_nowait()
                     
-                    success = esp32_controller.set_gesture(esp32_gesture)
-                    if success:
-                        print(f"ESP32: Sent gesture {esp32_gesture} (success)")
-                        if esp32_gesture != last_gesture:
-                            last_gesture = esp32_gesture
-                            last_gesture_time = current_time
+                    if data is not None:
+                        pred = data[0]  # prediction from the model
+                        pred_prob = data[1]  # prediction probability
+                        
+                        # Map EMG prediction to ESP32 gesture
+                        esp32_gesture = esp32_controller.gesture_mapping.get(pred, 0)
+                        
+                        # Always send gesture commands, but apply hold time for different gestures only
+                        should_send = True
+                        if (esp32_gesture != last_gesture and 
+                            current_time - last_gesture_time < gesture_hold_time):
+                            should_send = False
+                            # This print is useful for debugging hold time logic
+                            # print(f"ESP32: Gesture {esp32_gesture} within hold time, skipping (EMG pred: {pred}, prob: {pred_prob:.2f})")
+                        
+                        if should_send:
+                            success = esp32_controller.set_gesture(esp32_gesture)
+                            if success:
+                                # Consolidated print statement
+                                print(f"ESP32: Sent gesture {esp32_gesture} (EMG pred: {pred}, prob: {pred_prob:.2f})")
+                                if esp32_gesture != last_gesture:
+                                    last_gesture = esp32_gesture
+                                    last_gesture_time = current_time
+                            else:
+                                print(f"ESP32: Failed to send gesture {esp32_gesture} - connection may be lost")
+                        
+                        predictions_processed += 1
                     else:
-                        print(f"ESP32: Failed to send gesture {esp32_gesture} - connection may be lost")
-            else:
-                break
+                        break
+                        
+                except Empty:
+                    # No more prediction data available, break from processing loop
+                    break
+                except Exception as e:
+                    print(f"ESP32 queue processing error: {e}")
+                    break
+            
+            # Small sleep only if no predictions were processed
+            if predictions_processed == 0:
+                time.sleep(0.02)  # Very short sleep when no data
                 
-        except Empty:
-            # Timeout occurred, continue loop
-            continue
         except Exception as e:
             print(f"ESP32 control loop error: {e}")
             time.sleep(0.1)
@@ -477,7 +622,7 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
     
     # Cleanup
     esp32_controller.emergency_stop()
-    esp32_controller.disconnect()
+    esp32_controller.disconnect(restore_auto_mode=False)
     print('ESP32 control loop stopped')
 
 

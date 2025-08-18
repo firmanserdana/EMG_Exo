@@ -2,15 +2,15 @@
 # Configuration for ESP32-based pneumatic glove control system
 
 # Network settings
-ip_address: "172.20.10.3" # ESP32 IP address
+ip_address: "172.20.10.6" # ESP32 IP address
 port: 4210 # TCP port for communication
 timeout: 10 # Connection timeout in seconds (increased for stability)
 
 # Control settings
 enabled: true # Enable/disable ESP32 control
-gesture_hold_time: 0.1 # Minimum time between gesture changes (seconds) - reduced for more responsive testing
+gesture_hold_time: 0.5 # Minimum time between gesture changes (seconds) - increased for stability
 connection_mode: "persistent" # Connection mode: "persistent" (maintain constant connection) or "reconnect" (reconnect as needed)
-heartbeat_interval: 5.0 # Send heartbeat every N seconds to keep connection alive (only for persistent mode)
+heartbeat_interval: 10.0 # Send heartbeat every N seconds to keep connection alive (increased for stability)
 
 # Default pressure settings (0-100)
 default_pressure:
@@ -24,11 +24,10 @@ default_speed: 4 # Default speed level (0=Stop, 1=Slow, 2=Medium, 3=Fast, 4=Fast
 # This maps the output classes from your trained models to ESP32 gesture IDs
 # Mapping follows Unity VR OpenLoopConfig.json gesture definitions
 
-# Open/Close task mapping (graspIDOpenClose: [0, 1, 2])
+# Open/Close task mapping (graspIDOpenClose: [0, 1])
 gesture_mapping_open_close:
   0: 2 # HandOpen -> ESP32 Extend (case 2: "222220")
   1: 1 # HandClose -> ESP32 All Flex (case 1: "111110")
-  2: 1 # HandClose -> ESP32 All Flex (case 1: "111110" - same as class 1)
 
 # Grasp Patterns task mapping (graspIDGraspPatterns: [0, 2, 3, 4])
 gesture_mapping_grasp_patterns:
@@ -48,7 +47,6 @@ gesture_mapping_single_fingers:
 gesture_mapping:
   0: 2 # Hand Open -> ESP32 Extend (case 2)
   1: 1 # Fist -> ESP32 All Flex (case 1)
-  2: 3 # HookGrasp -> ESP32 IMRP Flex (case 3)
   3: 4 # LateralGrasp -> ESP32 3-Finger Pinch (case 4)
   4: 8 # IndexPointing -> ESP32 Index Pointing (case 8)
   5: 5 # ThumbFlexion -> ESP32 Thumb (case 5)

@@ -2,7 +2,7 @@ import os
 import re
 import glob
 import time
-import keyboard
+import argparse
 import yaml
 import json
 import numpy as np
@@ -18,6 +18,10 @@ from utils.signal_filtering import *
 from utils.communication_64 import *
 from utils.network_utils import *
 from utils.data_utils import *
+from models.lstm_model import *
+from models.tfm_model import *
+from models.ctfm_model import *
+from models.crnn_model import *
 
 # Sottoprocesso di acquisizione
 def AcquisitionLoop(connection, acq_params, dec_params, dec_queue, save_queue, stop_program, decoding_active=False):
@@ -187,7 +191,59 @@ def DecodingLoop(acq_params, dec_params, dec_queue, pred_control_queue, pred_sav
     is_cuda = torch.cuda.is_available()
     device = torch.device("cuda") if is_cuda else torch.device("cpu")
 
-    model = torch.load(dec_params['model_file'], weights_only=False, map_location=device)
+    # Get the model configuration
+    models_cfg_file = os.path.join('config', 'models', f"{dec_params['model_type']}_cfg.yaml")
+    with open(models_cfg_file, 'r') as file:
+        model_cfg = yaml.safe_load(file)
+
+    # Model initialization
+    if dec_params['model_type'] == 'LSTM':
+        model = LSTMModel(
+            input_dim=acq_params['num_channels_emg'],
+            hidden_size=model_cfg['hidden_size'],
+            num_output=dec_params['num_class'],
+            num_layers=model_cfg['num_layers'],
+            drop_prob=model_cfg['dropout']
+        )
+    elif dec_params['model_type'] == 'CTFM':
+        model = CTFMModel(
+            emb_size=model_cfg['emb_size'],
+            num_layers=model_cfg['num_layers'],
+            num_heads=model_cfg['num_heads'],
+            time_conv_size=model_cfg['time_conv_size'],
+            seq_length=dec_params['seq_len'],
+            num_channels=acq_params['num_channels_emg'],
+            n_out=dec_params['num_class'],
+            use_cls_token=model_cfg['use_cls_token'],
+            dropout=model_cfg['dropout']
+        )
+    elif dec_params['model_type'] == 'TFM':
+        model = TFMModel(
+            input_dim=acq_params['num_channels_emg'],
+            embed_dim=model_cfg['emb_size'],
+            num_heads=model_cfg['num_heads'],
+            num_layers=model_cfg['num_layers'],
+            num_classes=dec_params['num_class'],
+            max_len=dec_params['seq_len'],
+            use_cls_token=model_cfg['use_cls_token'],
+            dropout=model_cfg['dropout']
+        )
+    elif dec_params['model_type'] == 'CRNN':
+        model = CRNNModel(
+            input_dim=acq_params['num_channels_emg'],
+            time_conv_size=model_cfg['time_conv_size'],
+            time_stride=model_cfg['time_stride'],
+            num_time_filters=model_cfg['num_time_filters'],
+            hidden_size=model_cfg['hidden_size'],
+            num_layers=model_cfg['num_layers'],
+            num_output=dec_params['num_class'],
+            drop_prob=model_cfg['dropout']
+        )
+    else:
+        raise ValueError(f"Unknown model type: {dec_params['model_type']}")
+
+    model.load_state_dict(torch.load(dec_params['model_file'], map_location=device))
+    model.to(device)
     model.eval()
 
     # buffers initialization
@@ -469,7 +525,11 @@ if __name__ == "__main__":
     print("Press 'esc' to stop the script\n")
 
     try:               
-        keyboard.wait('esc')   
+        # Cross-platform graceful stop: wait for Enter or Ctrl+C
+        try:
+            input("\nDebug acquisition running. Press Enter to stop...\n")
+        except KeyboardInterrupt:
+            pass
     except KeyboardInterrupt:
         print("\nStopping the program...")
     

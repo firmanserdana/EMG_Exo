@@ -78,9 +78,9 @@ for ch in range(num_channels_emg):
     plt.plot(time_emg, ch+normalized_emg, linewidth=0.5)
 
 if not rest_mvc_data:
-    # retrieving events
-    grasps_start = [event[1] for event in events if event[0].startswith('grasp_start')] - timestamps[0]   
-    grasp_released = [event[1] for event in events if event[0] == 'grasp_released'] - timestamps[0]
+    # retrieving events (convert to numpy arrays for scalar subtraction)
+    grasps_start = np.array([event[1] for event in events if event[0].startswith('grasp_start')]) - timestamps[0]
+    grasp_released = np.array([event[1] for event in events if event[0] == 'grasp_released']) - timestamps[0]
 
     # plot the events
     for event in grasps_start:

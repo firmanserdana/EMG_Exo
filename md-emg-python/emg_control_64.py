@@ -5,6 +5,7 @@ import re
 import glob
 import time
 import yaml
+import queue
 import numpy as np
 from multiprocessing import Process, Queue, Value
 from threading import Thread
@@ -41,35 +42,42 @@ except Exception as e:
     print(f"Current process priority: {process.nice()}")
 
 # Thread for saving the predictions made by the model
-def StorePredictionLoop(pred_save_queue, pred_file_name):
+def StorePredictionLoop(pred_save_queue, pred_file_name, stop_program):
     print('Starting the prediction saving loop')
 
-    while True:
-        # Get the predictions from the queue
-        predictions = pred_save_queue.get()
+    while not stop_program.value:
+        try:
+            # Get the predictions from the queue
+            predictions = pred_save_queue.get(timeout=0.1)
 
-        if predictions is not None:
-            with open(pred_file_name, 'ab') as f:
-                pickle.dump(predictions, f)
-        else:
+            if predictions is not None:
+                with open(pred_file_name, 'ab') as f:
+                    pickle.dump(predictions, f)
+            else:
+                break
+        except queue.Empty:
+            continue
+        except KeyboardInterrupt:
             break
 
     print('Prediction saving loop stopped')
 
 # Thread for saving the EMG raw data recorded
-def SaveData(data_filename, save_queue):
+def SaveData(data_filename, save_queue, stop_program):
     print('Starting the saving loop')
 
     # saving the data
     with open(data_filename, 'ab') as file:
-        while True:  
+        while not stop_program.value:
             try:
-                data = save_queue.get() # wait until there is something in the queue to save
+                data = save_queue.get(timeout=0.1) # wait until there is something in the queue to save
 
                 if data is not None:
-                    np.save(file, data)  
+                    np.save(file, data)
                 else:
-                    break   
+                    break
+            except queue.Empty:
+                continue
             except KeyboardInterrupt:
                 break
 
@@ -89,6 +97,7 @@ if __name__ == "__main__":
     session = args.session
     is_mvc_session = args.is_mvc_session
     esp32_enabled_override = args.esp32_enabled
+    control_mode = args.control_mode
 
     subj_id = f'S{subj}'
 
@@ -168,8 +177,8 @@ if __name__ == "__main__":
         pred_control_queue = Queue() # predictions queue for the session control
         pred_save_queue = Queue() # predictions queue for the saving of the predictions
 
-    # queue for ESP32 control (if enabled)
-    pred_esp32_queue = Queue() if esp32_cfg['enabled'] and decoding_active else None
+    # queue for ESP32 control (if enabled) - increased size for better parallel processing
+    pred_esp32_queue = Queue(maxsize=50) if esp32_cfg['enabled'] and decoding_active else None
 
     # queue for the streaming data
     stream_queue = Queue() if streaming_active else None
@@ -221,7 +230,16 @@ if __name__ == "__main__":
         feature_win_len = features_cfg['windows_length'][feature_type]['win_length']
         feature_win_shift = features_cfg['windows_length'][feature_type]['win_shift']
 
+        # Define number of classes for each task
+        task_num_classes = {
+            'open_close': 3,  # classes: 0 (rest), 1 (close), 2 (open)
+            'grasp_patterns': 4,  # classes: 0 (rest), 2 (hook), 3 (lateral), 4 (index pointing)
+            'single_fingers': 4   # classes: 0 (rest), 5 (thumb), 6 (index), 7 (MRP)
+        }
+
         dec_params = {
+            'model_type': model_type,
+            'num_class': task_num_classes[task],
             'feature_type': feature_type,
             'dec_win_length': feature_win_len,
             'dec_win_shift': feature_win_shift,
@@ -233,7 +251,8 @@ if __name__ == "__main__":
 
         control_params = {
             'proc_interval': emg_proc_cfg['processing_interval'],
-            'use_consec_pred': decoding_cfg['use_consec_pred']
+            'use_consec_pred': decoding_cfg['use_consec_pred'],
+            'control_mode': control_mode
         }
 
         if decoding_cfg['use_consec_pred']:
@@ -273,7 +292,7 @@ if __name__ == "__main__":
         args=(conn_64, acq_params, dec_params, dec_queue, save_queue, stop_program, decoding_active, is_decoding, stream_queue)
     )
     p_events = Process(target=EventsLoop, args=(events_socket, events_queue, stop_program, decoding_active, is_decoding))
-    p_datasave = Thread(target=SaveData, args=(data_filename, save_queue)) # better using Thread for I/O workers      
+    p_datasave = Thread(target=SaveData, args=(data_filename, save_queue, stop_program)) # better using Thread for I/O workers      
     
     if decoding_active:
         p_decoding = Process(
@@ -286,7 +305,7 @@ if __name__ == "__main__":
         )
         p_pred_save = Thread(
             target=StorePredictionLoop, 
-            args=(pred_save_queue, pred_save_file_name)
+            args=(pred_save_queue, pred_save_file_name, stop_program)
         )
 
     # ESP32 control process (if enabled)
