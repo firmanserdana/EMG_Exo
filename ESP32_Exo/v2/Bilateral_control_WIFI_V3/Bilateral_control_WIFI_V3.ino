@@ -20,12 +20,12 @@ const int tcp_port = 4210;
 
 // ==================== Hardware Configuration ====================
 // Finger control pins
-const int flexion_pins[5] = {13, 14, 12, 27, 27};  // Flexion control pins
-const int extension_pins[5] = {17, 5, 18, 19, 19}; // Extension control pins
+const int flexion_pins[5] = {13, 14, 12, 27, 15};  // Flexion control pins
+const int extension_pins[5] = {17, 5, 18, 19, 15}; // Extension control pins
 const int pinching_pins[5] = {15, 15, 15, 15, 15};   // Pinching control pins
-const int abduction_pin = 16;                      // Abduction pin
-const int adduction_pin = 22;                      // Adduction pin
-const int emergency_pin = 33;                      // Emergency stop pin
+const int abduction_pin = 15;                      // Abduction pin
+const int adduction_pin = 16;                      // Adduction pin
+const int emergency_pin = 15;                      // Emergency stop pin
 
 // I2C Configuration
 const int sda_pin = 21;
