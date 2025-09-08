@@ -20,10 +20,10 @@ const int tcp_port = 4210;
 
 // ==================== Hardware Configuration ====================
 // Finger control pins
-const int flexion_pins[5] = {13, 12, 14, 27, 26};  // Flexion control pins
-const int extension_pins[5] = {17, 5, 18, 19, 25}; // Extension control pins
-const int pinching_pins[5] = {15, 2, 4, 16, 32};   // Pinching control pins
-const int abduction_pin = 21;                      // Abduction pin
+const int flexion_pins[5] = {13, 14, 12, 27, 27};  // Flexion control pins
+const int extension_pins[5] = {17, 5, 18, 19, 19}; // Extension control pins
+const int pinching_pins[5] = {15, 15, 15, 15, 15};   // Pinching control pins
+const int abduction_pin = 16;                      // Abduction pin
 const int adduction_pin = 22;                      // Adduction pin
 const int emergency_pin = 33;                      // Emergency stop pin
 
@@ -58,10 +58,10 @@ String finger_states = "000000"; // Finger states string
 // Data-driven gesture mapping for easier modification
 const char *GESTURE_TO_FINGER_STATES_MAP[] = {
     "000000", // 0: Relax
-    "111110", // 1: All flex (HandClose)
+    "111111", // 1: All flex (HandClose)
     "222220", // 2: All extend (HandOpen)
     "011110", // 3: IMRP Flexion (HookGrasp)
-    "333000", // 4: 3-finger pinch (LateralGrasp)
+    "111110", // 4: 3-finger pinch (LateralGrasp)
     "100000", // 5: Thumb
     "010000", // 6: Index
     "001110", // 7: Middle, Ring, Pinky
