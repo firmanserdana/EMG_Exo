@@ -3,23 +3,33 @@ Control Loop for EMG Gesture Classification
 ==========================================
 
 This module handles the control logic for routing EMG predictions to Unity and ESP32 devices.
+Supports all tasks (open_close, grasp_patterns, single_fingers) with automatic gesture mapping.
 
 Control Modes:
 --------------
 1. 'synchronized' (default): ESP32 follows Unity display for consistent user feedback
-   - Unity receives EMG predictions
-   - ESP32 shows the same gesture as Unity
-   - Best for user studies where visual and haptic feedback should match
+   - Unity receives EMG predictions directly
+   - ESP32 gets mapped gestures to match Unity display
+   - Uses task-specific mapping to ensure visual-haptic consistency
+   - Best for user studies where visual and haptic feedback must match
 
 2. 'unity_only': Independent control systems  
-   - Unity receives EMG predictions
+   - Unity receives EMG predictions directly
    - ESP32 receives raw EMG predictions independently
-   - Use when Unity and ESP32 should operate independently
+   - Use when Unity and ESP32 should operate separately
 
 3. 'esp32_only': ESP32 control only
    - Unity receives no events
    - ESP32 receives raw EMG predictions
    - Use for ESP32-only testing or when Unity is not needed
+
+Task Support:
+-------------
+- open_close: 0=HandOpen, 1=HandClose, 2=Rest
+- grasp_patterns: 0=HandOpen, 2=HookGrasp, 3=LateralGrasp, 4=IndexPointing  
+- single_fingers: 0=HandOpen, 5=ThumbFlexion, 6=IndexFlexion, 7=MRPFlexion
+
+Automatic gesture mapping ensures ESP32 shows correct gestures for each task.
 
 Usage:
 ------
@@ -48,7 +58,45 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
     # synchronized: ESP32 follows Unity display (default)
     control_mode = control_params.get('control_mode', 'synchronized')  # default to synchronized
     
+    # Get task name for gesture mapping (if available)
+    task_name = control_params.get('task', 'open_close')  # default to open_close
+    
+    # Define Unity event ID to ESP32 gesture mapping for synchronized mode
+    # This ensures ESP32 shows the same gesture as Unity regardless of task
+    def get_esp32_gesture_for_unity_event(unity_event_id, task):
+        """
+        Map Unity event ID to ESP32 gesture for synchronized mode.
+        This ensures both Unity and ESP32 show the same gesture to the user.
+        """
+        # Task-specific mappings from Unity event ID to ESP32 gesture
+        unity_to_esp32_mappings = {
+            'open_close': {
+                0: 2,  # HandOpen (Unity 0) -> ESP32 Extend (2) 
+                1: 1,  # HandClose (Unity 1) -> ESP32 Flex (1)
+                2: 0   # Rest (Unity 2) -> ESP32 Relax (0)
+            },
+            'grasp_patterns': {
+                0: 0,  # HandOpen (Unity 0) -> ESP32 Relax (0)
+                2: 3,  # HookGrasp (Unity 2) -> ESP32 2-Finger Pinch (3)
+                3: 4,  # LateralGrasp (Unity 3) -> ESP32 3-Finger Pinch (4) 
+                4: 6   # IndexPointing (Unity 4) -> ESP32 Index (6)
+            },
+            'single_fingers': {
+                0: 0,  # HandOpen (Unity 0) -> ESP32 Relax (0)
+                5: 5,  # ThumbFlexion (Unity 5) -> ESP32 Thumb (5)
+                6: 6,  # IndexFlexion (Unity 6) -> ESP32 Index (6)
+                7: 7   # MRPFlexion (Unity 7) -> ESP32 Middle (7)
+            }
+        }
+        
+        # Get mapping for the current task
+        task_mapping = unity_to_esp32_mappings.get(task, {})
+        
+        # Return mapped ESP32 gesture, fallback to unity_event_id if no mapping found
+        return task_mapping.get(unity_event_id, unity_event_id)
+    
     print(f"Control mode: {control_mode}")
+    print(f"Task: {task_name}")
     if control_mode == 'unity_only':
         print("  - Unity: Will receive EMG predictions")
         print("  - ESP32: Will follow raw EMG predictions independently")
@@ -133,7 +181,14 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
             # Control mode-specific mapping logic
             if control_mode == 'unity_only':
                 # Unity gets EMG predictions, ESP32 gets raw EMG independently
-                unity_event_id = pred  # Direct EMG prediction to Unity
+                # Account for rest class offset in model predictions
+                if pred == 1:  # Model's HandOpen (class 1) -> Unity HandOpen (ID 0)
+                    unity_event_id = 0
+                elif pred == 2:  # Model's HandClose (class 2) -> Unity HandClose (ID 1)
+                    unity_event_id = 1
+                else:  # Rest class
+                    unity_event_id = None
+                    
                 esp32_gesture_id = pred  # Direct EMG prediction to ESP32 (independent)
                 
             elif control_mode == 'esp32_only':
@@ -143,16 +198,21 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
                 
             else:  # synchronized mode (default)
                 # ESP32 follows Unity display for synchronized feedback
-                # Map for Unity (direct mapping for open_close task)
-                if pred == 0:
-                    unity_event_id = 0  # HandOpen -> Unity 0
-                elif pred == 1:
-                    unity_event_id = 1  # HandClose -> Unity 1 
-                else:
-                    unity_event_id = pred  # fallback for other tasks
+                # Account for rest class offset in model predictions
+                # Model outputs: 0=Rest, 1=HandOpen, 2=HandClose
+                # Unity expects: 0=HandOpen, 1=HandClose
+                if pred == 1:  # Model's HandOpen (class 1) -> Unity HandOpen (ID 0)
+                    unity_event_id = 0
+                elif pred == 2:  # Model's HandClose (class 2) -> Unity HandClose (ID 1)
+                    unity_event_id = 1
+                else:  # Rest class (pred == 0) - no Unity event
+                    unity_event_id = None
                 
-                # ESP32 shows the same gesture as Unity (synchronized)
-                esp32_gesture_id = unity_event_id
+                # ESP32 gets mapped gesture to match Unity display
+                if unity_event_id is not None:
+                    esp32_gesture_id = get_esp32_gesture_for_unity_event(unity_event_id, task_name)
+                else:
+                    esp32_gesture_id = None
             
             # Send ESP32 prediction to ESP32 queue (if ESP32 is enabled)
             if pred_esp32_queue is not None and esp32_gesture_id is not None:

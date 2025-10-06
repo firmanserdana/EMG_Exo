@@ -252,7 +252,8 @@ if __name__ == "__main__":
         control_params = {
             'proc_interval': emg_proc_cfg['processing_interval'],
             'use_consec_pred': decoding_cfg['use_consec_pred'],
-            'control_mode': control_mode
+            'control_mode': control_mode,
+            'task': task
         }
 
         if decoding_cfg['use_consec_pred']:

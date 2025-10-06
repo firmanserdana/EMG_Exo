@@ -575,11 +575,11 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
                     data = pred_esp32_queue.get_nowait()
                     
                     if data is not None:
-                        pred = data[0]  # prediction from the model
+                        esp32_gesture = data[0]  # Already mapped ESP32 gesture ID from control loop
                         pred_prob = data[1]  # prediction probability
                         
-                        # Map EMG prediction to ESP32 gesture
-                        esp32_gesture = esp32_controller.gesture_mapping.get(pred, 0)
+                        # data[0] is now the correctly mapped ESP32 gesture, no need to remap
+                        # esp32_gesture = esp32_controller.gesture_mapping.get(pred, 0) # REMOVED
                         
                         # Always send gesture commands, but apply hold time for different gestures only
                         should_send = True
@@ -593,7 +593,7 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
                             success = esp32_controller.set_gesture(esp32_gesture)
                             if success:
                                 # Consolidated print statement
-                                print(f"ESP32: Sent gesture {esp32_gesture} (EMG pred: {pred}, prob: {pred_prob:.2f})")
+                                print(f"ESP32: Sent gesture {esp32_gesture} (prob: {pred_prob:.2f})")
                                 if esp32_gesture != last_gesture:
                                     last_gesture = esp32_gesture
                                     last_gesture_time = current_time
