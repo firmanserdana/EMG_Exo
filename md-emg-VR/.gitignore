@@ -76,3 +76,8 @@ crashlytics-build.properties
 /Assets/TextMesh Pro.meta
 
 .DS_Store
+
+*.x86_64
+*.so
+/exo_virt_Data/
+
