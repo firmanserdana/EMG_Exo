@@ -3,12 +3,13 @@ using System;
 using UnityEngine;
 using System.Globalization;
 using System.Collections.Generic;
+using System.IO;
 
 public static class HandAngles
 {
     // TODO: move this to a config file
-    public static string[] fingerNames = new string[] { 
-        "Thumb", "Index", "Middle", "Ring", "Pinky" 
+    public static string[] fingerNames = new string[] {
+        "Thumb", "Index", "Middle", "Ring", "Pinky"
     };
 
     static int numJoints = 3; // Number of joints per finger
@@ -41,25 +42,35 @@ public static class HandAngles
     public static Vector3 getGraspAngles(string graspName, string fingerName, int joint)
     {
         XmlDocument doc = new XmlDocument();
-        doc.Load(Application.dataPath + "/parameters/hands_grasp_angles.xml");
+
+        string streamingAssetsPath = Path.Combine(Application.streamingAssetsPath ?? string.Empty, "Parameters", "hands_grasp_angles.xml");
+        string fallbackAssetsPath = Path.Combine(Application.dataPath, "Parameters", "hands_grasp_angles.xml");
+        string xmlPath = File.Exists(streamingAssetsPath) ? streamingAssetsPath : fallbackAssetsPath;
+
+        if (!File.Exists(xmlPath))
+        {
+            throw new FileNotFoundException($"Grasp angles XML not found at '{streamingAssetsPath}' or '{fallbackAssetsPath}'.");
+        }
+
+        doc.Load(xmlPath);
 
         XmlNode grasps = doc.DocumentElement; ;
 
         XmlNode graspType = grasps != null ? grasps.SelectSingleNode(graspName) : null;
 
         // Check if the finger exists in this grasp definition.
-        
+
         if (graspType != null && graspType.SelectSingleNode(fingerName) != null)
         {
             XmlNode fingerNode = graspType.SelectSingleNode(fingerName);
-            
+
             // Ensure the requested joint index exists.
             if (fingerNode.ChildNodes.Count > joint)
             {
                 XmlNode fingerJoint = fingerNode.ChildNodes[joint];
 
                 // Retrieve angles if defined.
-                if (fingerJoint.ChildNodes.Count >= 3 && 
+                if (fingerJoint.ChildNodes.Count >= 3 &&
                     fingerJoint.ChildNodes[0].InnerText != "")
                 {
                     float x = float.Parse(fingerJoint.ChildNodes[0].InnerText, CultureInfo.InvariantCulture);
