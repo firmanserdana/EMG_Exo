@@ -123,6 +123,9 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
     if use_consec_pred:
         num_consec_pred = control_params['num_consec_pred'] # default to 1 if not specified    
         last_predictions = deque([], maxlen=num_consec_pred)
+    
+    # Rest state tracking - Track last sent gesture to avoid duplicate rest commands
+    last_sent_gesture = None  # Track the last gesture sent to ESP32
 
     def send_to_esp32_async(data, queue):
         """Asynchronously send data to ESP32 queue to avoid blocking Unity communication"""
@@ -165,8 +168,22 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
             prediction_valid = True
             
             if pred_prob < min_confidence:
-                print(f"   ⚠️  Low confidence prediction ({pred_prob:.2f} < {min_confidence}), skipping")
+                print(f"   ⚠️  Low confidence prediction ({pred_prob:.2f} < {min_confidence}), sending rest state")
                 prediction_valid = False
+                
+                # Send rest state (gesture 0) to ESP32 immediately on low confidence
+                # This releases force on the soft exo for user safety
+                if pred_esp32_queue is not None and last_sent_gesture not in (0, None):
+                    # Only send if we haven't already sent rest state (avoid duplicates)
+                    rest_data = (0, 1.0, rcv_time)  # gesture 0 (Relax), full confidence
+                    esp32_thread = threading.Thread(
+                        target=send_to_esp32_async,
+                        args=(rest_data, pred_esp32_queue),
+                        daemon=True
+                    )
+                    esp32_thread.start()
+                    last_sent_gesture = 0
+                    print(f"   ✓ Sent rest state (gesture 0) to ESP32 due to low confidence")
             
             if rcv_time - last_ts < min_time_between_preds:
                 print(f"   ⚠️  Prediction too soon ({rcv_time - last_ts:.3f}s < {min_time_between_preds}s), skipping")
@@ -223,6 +240,7 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
                     daemon=True
                 )
                 esp32_thread.start()
+                last_sent_gesture = esp32_gesture_id  # Track the last sent gesture
 
             if use_consec_pred:
                 last_predictions.append(pred)
@@ -276,14 +294,18 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
             print('\n🔄 Decoding stopped - sending rest state commands...')
             
             # Send rest state to ESP32 (gesture 0 = Relax) if ESP32 is enabled
-            if pred_esp32_queue is not None:
+            # Only send if we haven't already sent rest state (avoid duplicates)
+            if pred_esp32_queue is not None and last_sent_gesture != 0:
                 try:
                     # Send relax gesture (0) to ESP32
                     esp32_rest_data = (0, 1.0, time.perf_counter())  # gesture 0, full confidence, timestamp
                     pred_esp32_queue.put(esp32_rest_data, timeout=1.0)
+                    last_sent_gesture = 0
                     print('✓ Sent relax command (gesture 0) to ESP32')
                 except Exception as e:
                     print(f'⚠️  Failed to send rest command to ESP32: {e}')
+            elif pred_esp32_queue is not None and last_sent_gesture == 0:
+                print('✓ ESP32 already in rest state (gesture 0), skipping duplicate command')
             
             # Send rest state to Unity if not in esp32_only mode
             # For Unity, we don't send an event - the hand will remain in last state
