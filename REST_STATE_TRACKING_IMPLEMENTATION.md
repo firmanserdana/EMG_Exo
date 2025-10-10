@@ -7,10 +7,7 @@ This document describes the rest state tracking implementation that enhances the
 ## Problem Statement
 
 The system needed a way to:
-1. **Track rest state** - Avoid sending duplicate rest commands to the ESP32
 2. **Auto-rest on low confidence** - Automatically release force when predictions are uncertain
-3. **Prioritize safety** - Ensure ESP32 receives rest commands immediately for user safety
-4. **Work universally** - Function correctly across all control modes (synchronized, unity_only, esp32_only)
 
 ## Solution
 
@@ -18,16 +15,13 @@ The system needed a way to:
 
 #### 1. Rest State Tracking Variable
 ```python
-# Track the last gesture sent to ESP32 to avoid duplicate rest commands
 last_sent_gesture = None
 ```
 
-This variable is initialized to `None` and updated whenever a gesture is sent to the ESP32.
 
 #### 2. Automatic Rest on Low Confidence
 
 When a prediction has confidence below the threshold (default 0.4), the system:
-- Immediately sends gesture 0 (Relax) to the ESP32 queue
 - Updates `last_sent_gesture` to 0
 - Only sends if not already in rest state (avoids duplicates)
 
@@ -36,33 +30,18 @@ if pred_prob < min_confidence:
     print(f"   ⚠️  Low confidence prediction ({pred_prob:.2f} < {min_confidence}), sending rest state")
     prediction_valid = False
     
-    # Send rest state (gesture 0) to ESP32 immediately on low confidence
-    if pred_esp32_queue is not None and last_sent_gesture != 0:
         rest_data = (0, 1.0, rcv_time)  # gesture 0 (Relax), full confidence
-        esp32_thread = threading.Thread(
-            target=send_to_esp32_async,
-            args=(rest_data, pred_esp32_queue),
             daemon=True
         )
-        esp32_thread.start()
         last_sent_gesture = 0
-        print(f"   ✓ Sent rest state (gesture 0) to ESP32 due to low confidence")
 ```
 
 #### 3. Tracking Valid Gestures
 
-When a valid gesture is sent to ESP32, the tracking variable is updated:
 
 ```python
-if pred_esp32_queue is not None and esp32_gesture_id is not None:
-    esp32_data = (esp32_gesture_id, pred_prob, rcv_time)
-    esp32_thread = threading.Thread(
-        target=send_to_esp32_async, 
-        args=(esp32_data, pred_esp32_queue),
         daemon=True
     )
-    esp32_thread.start()
-    last_sent_gesture = esp32_gesture_id  # Track the last sent gesture
 ```
 
 #### 4. Smart Cleanup on Decoding Stop
@@ -71,16 +50,9 @@ When decoding stops (receives `None`), the system checks before sending rest:
 
 ```python
 # Only send if we haven't already sent rest state (avoid duplicates)
-if pred_esp32_queue is not None and last_sent_gesture != 0:
     try:
-        esp32_rest_data = (0, 1.0, time.perf_counter())
-        pred_esp32_queue.put(esp32_rest_data, timeout=1.0)
         last_sent_gesture = 0
-        print('✓ Sent relax command (gesture 0) to ESP32')
     except Exception as e:
-        print(f'⚠️  Failed to send rest command to ESP32: {e}')
-elif pred_esp32_queue is not None and last_sent_gesture == 0:
-    print('✓ ESP32 already in rest state (gesture 0), skipping duplicate command')
 ```
 
 ## Benefits
@@ -94,8 +66,6 @@ elif pred_esp32_queue is not None and last_sent_gesture == 0:
 ### For System
 ✅ **Reduced redundancy** - No duplicate rest commands sent
 ✅ **Better performance** - Less queue congestion
-✅ **Mode-agnostic** - Works in all control modes (synchronized, unity_only, esp32_only)
-✅ **Priority safety** - ESP32 rest commands are sent immediately, non-blocking
 
 ## Control Mode Compatibility
 
@@ -103,21 +73,13 @@ The rest state tracking works across all three control modes:
 
 ### Synchronized Mode (default)
 - Unity receives EMG predictions
-- ESP32 follows Unity display (synchronized)
-- Rest state sent to ESP32 on low confidence
 - Duplicate rest commands avoided
 
 ### Unity Only Mode
 - Unity receives EMG predictions
-- ESP32 receives raw EMG predictions independently
-- Rest state sent to ESP32 on low confidence
 - Both systems work independently with rest state protection
 
-### ESP32 Only Mode
 - Unity receives no events
-- ESP32 receives raw EMG predictions
-- Rest state sent to ESP32 on low confidence
-- Full rest state protection for ESP32-only operation
 
 ## Testing
 
@@ -133,7 +95,6 @@ Tests the core logic:
 ### 2. `test_rest_state.py` (existing)
 Tests integration behavior:
 - Control loop rest state on stop
-- ESP32 cleanup behavior
 - Queue processing
 
 Both test suites pass successfully.
@@ -163,7 +124,6 @@ The implementation follows best practices:
 This implementation provides an elegant solution to rest state management by:
 1. Automatically entering rest state during uncertain periods
 2. Avoiding duplicate commands for better efficiency
-3. Prioritizing user safety with immediate ESP32 rest commands
 4. Working seamlessly across all control modes
 
 The result is a more natural, safer, and more responsive user experience with the EMG-Exo system.
