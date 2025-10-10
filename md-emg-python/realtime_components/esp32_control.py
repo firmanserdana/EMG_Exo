@@ -620,8 +620,43 @@ def ESP32ControlLoop(esp32_params, pred_esp32_queue, stop_program, task=None):
             time.sleep(0.1)
             continue
     
-    # Cleanup
+    # Cleanup - process any remaining commands in queue before stopping
+    print('\n🔄 ESP32 Control Loop stopping - processing remaining commands...')
+    remaining_commands = 0
+    try:
+        # Process any remaining rest commands with a short timeout
+        timeout_time = time.perf_counter() + 2.0  # 2 second timeout for cleanup
+        while time.perf_counter() < timeout_time:
+            try:
+                data = pred_esp32_queue.get_nowait()
+                if data is not None:
+                    esp32_gesture = data[0]
+                    pred_prob = data[1]
+                    # Process this command
+                    if esp32_controller.connected:
+                        success = esp32_controller.set_gesture(esp32_gesture)
+                        if success:
+                            print(f"ESP32: Processed final gesture {esp32_gesture} during cleanup")
+                            remaining_commands += 1
+                    # If it's gesture 0 (relax), we're done
+                    if esp32_gesture == 0:
+                        print('✓ ESP32: Rest state command processed')
+                        break
+                else:
+                    break
+            except Empty:
+                break
+    except Exception as e:
+        print(f"ESP32: Error during cleanup: {e}")
+    
+    if remaining_commands > 0:
+        print(f"ESP32: Processed {remaining_commands} remaining command(s)")
+    
+    # Final emergency stop to ensure relax state
+    print('ESP32: Sending final emergency stop...')
     esp32_controller.emergency_stop()
+    time.sleep(0.5)  # Give ESP32 time to process the stop command
+    
     esp32_controller.disconnect(restore_auto_mode=False)
     print('ESP32 control loop stopped')
 

@@ -51,6 +51,7 @@ This application consists of five main components:
   - Improved connection stability with automatic reconnection
   - Heartbeat mechanism for maintaining persistent connections
   - Auto-discovery of ESP32 devices on network
+  - **Automatic rest state return**: When decoding stops, the system automatically returns both Unity and ESP32 glove to rest/relax state
 - **VR Integration**:
   - Unity-based VR hand visualization
   - TCP/IP communication for real-time control
@@ -740,6 +741,7 @@ Real-time physical hand assistance system with enhanced connectivity:
 - **Variable Speed Control**: Adjustable movement speed (5 levels: Stop, Slow, Medium, Fast, Fastest)
 - **Connection Health Monitoring**: Real-time connection status with heartbeat mechanism
 - **Safety Features**: Emergency stop and automatic fault recovery
+- **Automatic Rest State**: System automatically returns to rest/relax state (gesture 0) when decoding stops
 - **Comprehensive Testing**: Auto-discovery, diagnostic tools, and debug modes
 - **Configuration Management**: YAML-based configuration with validation
 
