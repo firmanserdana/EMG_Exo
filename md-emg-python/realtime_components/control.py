@@ -272,6 +272,25 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
 
             last_ts = rcv_time  # update the last timestamp
         else:
+            # Decoding has stopped - send rest commands to both Unity and ESP32
+            print('\n🔄 Decoding stopped - sending rest state commands...')
+            
+            # Send rest state to ESP32 (gesture 0 = Relax) if ESP32 is enabled
+            if pred_esp32_queue is not None:
+                try:
+                    # Send relax gesture (0) to ESP32
+                    esp32_rest_data = (0, 1.0, time.perf_counter())  # gesture 0, full confidence, timestamp
+                    pred_esp32_queue.put(esp32_rest_data, timeout=1.0)
+                    print('✓ Sent relax command (gesture 0) to ESP32')
+                except Exception as e:
+                    print(f'⚠️  Failed to send rest command to ESP32: {e}')
+            
+            # Send rest state to Unity if not in esp32_only mode
+            # For Unity, we don't send an event - the hand will remain in last state
+            # This is normal behavior as Unity doesn't have a dedicated rest visualization
+            if control_mode != 'esp32_only':
+                print('  Unity hand will remain in last gesture state (normal behavior)')
+            
             break
 
     # Print performance statistics
