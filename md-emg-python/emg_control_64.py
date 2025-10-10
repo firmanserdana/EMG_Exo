@@ -15,7 +15,6 @@ from realtime_components.events_handler import *
 from realtime_components.decoding import *
 from realtime_components.control import *
 from realtime_components.streaming import *
-from realtime_components.esp32_control import ESP32ControlLoop
 from utils.signal_filtering import *
 from utils.communication_64 import *
 from utils.network_utils import *
@@ -96,8 +95,6 @@ if __name__ == "__main__":
     acquisition_type = args.acquisition_type
     session = args.session
     is_mvc_session = args.is_mvc_session
-    esp32_enabled_override = args.esp32_enabled
-    control_mode = args.control_mode
 
     subj_id = f'S{subj}'
 
@@ -126,14 +123,6 @@ if __name__ == "__main__":
 
     with open(os.path.join(config_folder, 'decoding_params.yaml')) as f:
         decoding_cfg = yaml.load(f, Loader=yaml.FullLoader)
-
-    with open(os.path.join(config_folder, 'esp32_control.yaml')) as f:
-        esp32_cfg = yaml.load(f, Loader=yaml.FullLoader)
-
-    # Override ESP32 enabled setting if specified via command line
-    if esp32_enabled_override is not None:
-        esp32_cfg['enabled'] = bool(esp32_enabled_override)
-        print(f"ESP32 control override: {'enabled' if esp32_cfg['enabled'] else 'disabled'}")
             
     # 64 connection parameters
     ip_address = config_64['ip_address']
@@ -169,7 +158,6 @@ if __name__ == "__main__":
     is_decoding = Value('b', False) # variable to control when the decoding is active
 
     events_queue = Queue()
-    unity_events_queue = Queue() if (decoding_active and esp32_cfg['enabled']) else None
     save_queue = Queue()
     dec_queue = Queue()
     dec_state_queue = Queue() # queue for the decoding state (if needed)
@@ -177,9 +165,6 @@ if __name__ == "__main__":
     if decoding_active:
         pred_control_queue = Queue() # predictions queue for the session control
         pred_save_queue = Queue() # predictions queue for the saving of the predictions
-
-    # queue for ESP32 control (if enabled) - increased size for better parallel processing
-    pred_esp32_queue = Queue(maxsize=50) if esp32_cfg['enabled'] and decoding_active else None
 
     # queue for the streaming data
     stream_queue = Queue() if streaming_active else None
@@ -253,7 +238,6 @@ if __name__ == "__main__":
         control_params = {
             'proc_interval': emg_proc_cfg['processing_interval'],
             'use_consec_pred': decoding_cfg['use_consec_pred'],
-            'control_mode': control_mode,
             'task': task
         }
 
@@ -301,7 +285,6 @@ if __name__ == "__main__":
             stop_program,
             decoding_active,
             is_decoding,
-            unity_events_queue,
         ),
     )
     p_datasave = Thread(target=SaveData, args=(data_filename, save_queue, stop_program)) # better using Thread for I/O workers      
@@ -318,20 +301,11 @@ if __name__ == "__main__":
                 control_params,
                 pred_control_queue,
                 stop_program,
-                pred_esp32_queue,
-                unity_events_queue,
             )
         )
         p_pred_save = Thread(
             target=StorePredictionLoop, 
             args=(pred_save_queue, pred_save_file_name, stop_program)
-        )
-
-    # ESP32 control process (if enabled)
-    if esp32_cfg['enabled'] and decoding_active and pred_esp32_queue is not None:
-        p_esp32 = Process(
-            target=ESP32ControlLoop,
-            args=(esp32_cfg, pred_esp32_queue, stop_program, task)
         )
 
     if streaming_active:
@@ -350,11 +324,6 @@ if __name__ == "__main__":
         p_decoding.start()
         p_control.start()
         p_pred_save.start()
-
-    # Start ESP32 process if enabled
-    if esp32_cfg['enabled'] and decoding_active and pred_esp32_queue is not None:
-        p_esp32.start()
-        print("ESP32 control process started")
 
     if streaming_active:
         p_stream.start()
@@ -402,12 +371,6 @@ if __name__ == "__main__":
 
         if p_pred_save.is_alive():
             p_pred_save.join()
-
-        # Terminate ESP32 process if running
-        if esp32_cfg['enabled'] and pred_esp32_queue is not None:
-            if 'p_esp32' in locals() and p_esp32.is_alive():
-                p_esp32.terminate()
-                print("ESP32 control process terminated")
 
     if streaming_active:
         socket_close(stream_socket)
