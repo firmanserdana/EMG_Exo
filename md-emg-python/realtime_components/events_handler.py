@@ -3,7 +3,14 @@ import time
 import json
 
 # Thread for reading the Unity TCP events
-def EventsLoop(events_socket, events_queue, stop_program, decoding_active=False, is_decoding=None):
+def EventsLoop(
+    events_socket,
+    events_queue,
+    stop_program,
+    decoding_active=False,
+    is_decoding=None,
+    broadcast_queue=None,
+):
     """
     Listens for and processes events from a TCP socket (e.g., Unity).
 
@@ -62,6 +69,13 @@ def EventsLoop(events_socket, events_queue, stop_program, decoding_active=False,
                         event_data['event_type'] = f"{event}_{event_id}"
 
                     events_queue.put(event_data)
+                    
+                    if broadcast_queue is not None:
+                        try:
+                            broadcast_queue.put(event_data.copy(), timeout=0.01)
+                        except Exception:
+                            # Non-blocking best effort broadcast; ignore if queue is full/unavailable
+                            pass
 
                 except json.JSONDecodeError:
                     print(f"Received invalid JSON data: {event_msg}")

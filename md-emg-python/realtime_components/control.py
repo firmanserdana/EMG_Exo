@@ -43,9 +43,16 @@ import time
 import json
 import threading
 from collections import deque
-from queue import Full
+from queue import Full, Empty
 
-def ControlLoop(events_socket, control_params, pred_control_queue, stop_program, pred_esp32_queue=None):
+def ControlLoop(
+    events_socket,
+    control_params,
+    pred_control_queue,
+    stop_program,
+    pred_esp32_queue=None,
+    unity_events_queue=None,
+):
     print('Starting the control loop...')
     
     # variables initialization
@@ -79,7 +86,7 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
                 0: 0,  # HandOpen (Unity 0) -> ESP32 Relax (0)
                 2: 3,  # HookGrasp (Unity 2) -> ESP32 2-Finger Pinch (3)
                 3: 4,  # LateralGrasp (Unity 3) -> ESP32 3-Finger Pinch (4) 
-                4: 6   # IndexPointing (Unity 4) -> ESP32 Index (6)
+                4: 8   # IndexPointing (Unity 4) -> ESP32 Index (6)
             },
             'single_fingers': {
                 0: 0,  # HandOpen (Unity 0) -> ESP32 Relax (0)
@@ -94,6 +101,24 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
         
         # Return mapped ESP32 gesture, fallback to unity_event_id if no mapping found
         return task_mapping.get(unity_event_id, unity_event_id)
+
+    # Map decoded model labels to Unity event IDs (rest handled separately)
+    unity_event_mappings = {
+        'open_close': {
+            1: 0,  # HandOpen
+            2: 1,  # HandClose
+        },
+        'grasp_patterns': {
+            3: 2,  # HookGrasp
+            4: 3,  # LateralGrasp
+            5: 4,  # IndexPointing
+        },
+        'single_fingers': {
+            6: 5,  # ThumbFlexion
+            7: 6,  # IndexFlexion
+            8: 7,  # MRPFlexion
+        },
+    }
     
     print(f"Control mode: {control_mode}")
     print(f"Task: {task_name}")
@@ -150,6 +175,61 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
             print(f"✗ Error sending to Unity: {e}")
             performance_stats['errors_count'] += 1
 
+    def send_rest_to_esp32(reason: str = ""):
+        """Helper to send rest (gesture 0) command to the ESP32 controller."""
+        nonlocal last_sent_gesture
+
+        if pred_esp32_queue is None:
+            return
+
+        if last_sent_gesture == 0:
+            return
+
+        rest_data = (0, 1.0, time.perf_counter())
+        esp32_thread = threading.Thread(
+            target=send_to_esp32_async,
+            args=(rest_data, pred_esp32_queue),
+            daemon=True,
+        )
+        esp32_thread.start()
+        last_sent_gesture = 0
+        if reason:
+            print(f"   ✓ Sent rest state (gesture 0) to ESP32 ({reason})")
+        else:
+            print("   ✓ Sent rest state (gesture 0) to ESP32")
+
+    def unity_event_listener():
+        """Listen for Unity trial events to enforce rest state between trials."""
+        if unity_events_queue is None:
+            return
+
+        print("Unity events listener started (ESP32 rest enforcement).")
+
+        while not stop_program.value:
+            try:
+                event = unity_events_queue.get(timeout=0.1)
+            except Empty:
+                continue
+            except Exception as exc:
+                print(f"⚠️  Unity events listener error: {exc}")
+                break
+
+            if not isinstance(event, dict):
+                continue
+
+            event_type = event.get('event_type', '')
+
+            if event_type.startswith('trial_end'):
+                send_rest_to_esp32("trial end")
+
+        print("Unity events listener stopped.")
+
+    # Start background listener for Unity events (trial boundaries)
+    unity_listener_thread = None
+    if unity_events_queue is not None:
+        unity_listener_thread = threading.Thread(target=unity_event_listener, daemon=True)
+        unity_listener_thread.start()
+
     # decoding loop
     while not stop_program.value:
         data = pred_control_queue.get()
@@ -174,16 +254,7 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
                 # Send rest state (gesture 0) to ESP32 immediately on low confidence
                 # This releases force on the soft exo for user safety
                 if pred_esp32_queue is not None and last_sent_gesture not in (0, None):
-                    # Only send if we haven't already sent rest state (avoid duplicates)
-                    rest_data = (0, 1.0, rcv_time)  # gesture 0 (Relax), full confidence
-                    esp32_thread = threading.Thread(
-                        target=send_to_esp32_async,
-                        args=(rest_data, pred_esp32_queue),
-                        daemon=True
-                    )
-                    esp32_thread.start()
-                    last_sent_gesture = 0
-                    print(f"   ✓ Sent rest state (gesture 0) to ESP32 due to low confidence")
+                    send_rest_to_esp32("low confidence")
             
             if rcv_time - last_ts < min_time_between_preds:
                 print(f"   ⚠️  Prediction too soon ({rcv_time - last_ts:.3f}s < {min_time_between_preds}s), skipping")
@@ -194,42 +265,60 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
             # Only process prediction if it's valid
             if not prediction_valid:
                 continue  # Skip this prediction
+
+            # Handle explicit rest predictions (label 0) to enforce ESP32 relax state
+            if pred == 0:
+                print("   → Rest prediction detected; enforcing rest state")
+                send_rest_to_esp32("rest prediction")
+                if use_consec_pred:
+                    last_predictions.clear()
+                last_ts = rcv_time
+                continue
             
             # Control mode-specific mapping logic
+            unity_event_id = None
+            esp32_gesture_id = None
+            task_unity_mapping = unity_event_mappings.get(task_name, {})
+
             if control_mode == 'unity_only':
                 # Unity gets EMG predictions, ESP32 gets raw EMG independently
                 # Account for rest class offset in model predictions
-                if pred == 1:  # Model's HandOpen (class 1) -> Unity HandOpen (ID 0)
-                    unity_event_id = 0
-                elif pred == 2:  # Model's HandClose (class 2) -> Unity HandClose (ID 1)
-                    unity_event_id = 1
-                else:  # Rest class
-                    unity_event_id = None
-                    
+                unity_event_id = task_unity_mapping.get(pred)
+                if unity_event_id is None:
+                    if pred in (0,):
+                        unity_event_id = None
+                    else:
+                        print(f"   ⚠️  No Unity mapping for prediction {pred} (task: {task_name}), using raw label")
+                        unity_event_id = pred
+
                 esp32_gesture_id = pred  # Direct EMG prediction to ESP32 (independent)
                 
             elif control_mode == 'esp32_only':
                 # Only ESP32 gets controlled, Unity receives no events
-                unity_event_id = None  # No Unity events
-                esp32_gesture_id = pred  # Direct EMG prediction to ESP32
-                
-            else:  # synchronized mode (default)
-                # ESP32 follows Unity display for synchronized feedback
-                # Account for rest class offset in model predictions
-                # Model outputs: 0=Rest, 1=HandOpen, 2=HandClose
-                # Unity expects: 0=HandOpen, 1=HandClose
-                if pred == 1:  # Model's HandOpen (class 1) -> Unity HandOpen (ID 0)
-                    unity_event_id = 0
-                elif pred == 2:  # Model's HandClose (class 2) -> Unity HandClose (ID 1)
-                    unity_event_id = 1
-                else:  # Rest class (pred == 0) - no Unity event
-                    unity_event_id = None
-                
-                # ESP32 gets mapped gesture to match Unity display
+                unity_event_id = task_unity_mapping.get(pred)
+
                 if unity_event_id is not None:
                     esp32_gesture_id = get_esp32_gesture_for_unity_event(unity_event_id, task_name)
                 else:
+                    if pred not in (0,):
+                        print(f"   ⚠️  No Unity mapping for prediction {pred} (task: {task_name}), sending raw label to ESP32")
+                        esp32_gesture_id = pred
+                    else:
+                        send_rest_to_esp32("rest prediction")
+                        last_ts = rcv_time
+                        continue
+                
+            else:  # synchronized mode (default)
+                # ESP32 follows Unity display for synchronized feedback
+                unity_event_id = task_unity_mapping.get(pred)
+
+                if unity_event_id is None:
+                    if pred not in (0,):
+                        print(f"   ⚠️  No Unity mapping for prediction {pred} (task: {task_name}), skipping Unity dispatch")
                     esp32_gesture_id = None
+                else:
+                    # ESP32 gets mapped gesture to match Unity display
+                    esp32_gesture_id = get_esp32_gesture_for_unity_event(unity_event_id, task_name)
             
             # Send ESP32 prediction to ESP32 queue (if ESP32 is enabled)
             if pred_esp32_queue is not None and esp32_gesture_id is not None:
@@ -248,7 +337,7 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
 
             # For open_close task: both class 0 (HandOpen) and class 1 (HandClose) are valid gestures
             # Only skip rest class for other tasks
-            is_rest_class = False  # For open_close, no prediction is considered "rest"
+            is_rest_class = unity_event_id is None
             
             if not is_rest_class:  # Send all predictions for open_close task
                 gesture_display = f"Unity ID: {unity_event_id if unity_event_id is not None else 'None'}, ESP32 gesture: {esp32_gesture_id if esp32_gesture_id is not None else 'None'}"
@@ -325,5 +414,8 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
     print(f'   • Errors: {performance_stats["errors_count"]}')
     if duration > 0:
         print(f'   • Processing rate: {performance_stats["predictions_processed"]/duration:.2f} pred/s')
+
+    if unity_listener_thread is not None and unity_listener_thread.is_alive():
+        unity_listener_thread.join(timeout=1.0)
 
     print('Control loop stopped')

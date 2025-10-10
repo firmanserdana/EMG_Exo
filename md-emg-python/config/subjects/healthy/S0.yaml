@@ -7,7 +7,7 @@ task_open_close:
   model_type: "LSTM"
   seq_len: 5
 task_grasp_patterns:
-  sessions_open_loop: [] # valid sessions numbers in open-loop modality
+  sessions_open_loop: [11, 12, 13, 14] # valid sessions numbers in open-loop modality
   sessions_closed_loop: [] # valid sessions numbers in closed-loop modality
   model_type: "LSTM"
   seq_len: 5

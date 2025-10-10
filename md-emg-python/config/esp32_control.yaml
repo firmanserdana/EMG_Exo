@@ -34,7 +34,7 @@ gesture_mapping_grasp_patterns:
   0: 0 # HandOpen -> ESP32 Relax/Open
   2: 3 # HookGrasp -> ESP32 2-Finger Pinch
   3: 4 # LateralGrasp -> ESP32 3-Finger Pinch
-  4: 6 # IndexPointing -> ESP32 Index
+  4: 8 # IndexPointing -> ESP32 Index Pointing
 
 # Single Fingers task mapping (graspIDSingleFingers: [0, 5, 6, 7])
 gesture_mapping_single_fingers:

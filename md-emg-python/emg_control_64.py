@@ -169,6 +169,7 @@ if __name__ == "__main__":
     is_decoding = Value('b', False) # variable to control when the decoding is active
 
     events_queue = Queue()
+    unity_events_queue = Queue() if (decoding_active and esp32_cfg['enabled']) else None
     save_queue = Queue()
     dec_queue = Queue()
     dec_state_queue = Queue() # queue for the decoding state (if needed)
@@ -292,7 +293,17 @@ if __name__ == "__main__":
         target=AcquisitionLoop, 
         args=(conn_64, acq_params, dec_params, dec_queue, save_queue, stop_program, decoding_active, is_decoding, stream_queue)
     )
-    p_events = Process(target=EventsLoop, args=(events_socket, events_queue, stop_program, decoding_active, is_decoding))
+    p_events = Process(
+        target=EventsLoop,
+        args=(
+            events_socket,
+            events_queue,
+            stop_program,
+            decoding_active,
+            is_decoding,
+            unity_events_queue,
+        ),
+    )
     p_datasave = Thread(target=SaveData, args=(data_filename, save_queue, stop_program)) # better using Thread for I/O workers      
     
     if decoding_active:
@@ -302,7 +313,14 @@ if __name__ == "__main__":
         )
         p_control = Process(
             target=ControlLoop, 
-            args=(events_socket, control_params, pred_control_queue, stop_program, pred_esp32_queue)
+            args=(
+                events_socket,
+                control_params,
+                pred_control_queue,
+                stop_program,
+                pred_esp32_queue,
+                unity_events_queue,
+            )
         )
         p_pred_save = Thread(
             target=StorePredictionLoop, 
