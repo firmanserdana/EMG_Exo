@@ -173,7 +173,7 @@ def ControlLoop(events_socket, control_params, pred_control_queue, stop_program,
                 
                 # Send rest state (gesture 0) to ESP32 immediately on low confidence
                 # This releases force on the soft exo for user safety
-                if pred_esp32_queue is not None and last_sent_gesture != 0:
+                if pred_esp32_queue is not None and last_sent_gesture not in (0, None):
                     # Only send if we haven't already sent rest state (avoid duplicates)
                     rest_data = (0, 1.0, rcv_time)  # gesture 0 (Relax), full confidence
                     esp32_thread = threading.Thread(
