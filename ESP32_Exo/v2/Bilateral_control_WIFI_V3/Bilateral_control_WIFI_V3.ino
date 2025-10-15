@@ -1,8 +1,10 @@
 #include <Adafruit_MCP4728.h>
 #include <ArduinoJson.h>
+#include <HardwareSerial.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
+#include <WiFiUdp.h>
 #include <Wire.h>
 #include "config.h"
 
@@ -22,11 +24,18 @@ const int tcp_port = 4210;
 // Finger control pins
 const int flexion_pins[5] = {13, 14, 12, 27, 15};  // Flexion control pins
 const int extension_pins[5] = {17, 5, 18, 19, 15}; // Extension control pins
-const int pinching_pins[5] = {15, 15, 15, 15, 15};   // Pinching control pins
+const int pinching_pins[5] = {15, 15, 15, 15, 15}; // Pinching control pins
 const int abduction_pin = 15;                      // Abduction pin
 const int adduction_pin = 16;                      // Adduction pin
 const int emergency_pin = 15;                      // Emergency stop pin
-const int button_pin = 33;                         // Push button pin for gesture control
+// Remote button bridge configuration
+const bool button_bridge_serial_enabled = true;
+const int button_serial_rx_pin = 35;                        // RX pin for secondary board UART (input only)
+const int button_serial_tx_pin = 4;                         // TX pin (optional acknowledge channel)
+const unsigned long button_bridge_activity_timeout = 10000; // 10 second activity window
+
+const bool button_bridge_wifi_enabled = true;
+const unsigned int button_udp_port = 4211; // UDP port for remote button packets
 
 // I2C Configuration
 const int sda_pin = 21;
@@ -45,9 +54,9 @@ ControlMode control_mode = WEB_MODE;
 // Control mode lock settings
 enum ControlModeLock
 {
-    AUTO_MODE,      // Automatic switching based on TCP connection
-    FORCE_WEB_MODE, // Always stay in WEB mode
-    FORCE_TCP_MODE,  // Always stay in TCP mode
+    AUTO_MODE,        // Automatic switching based on TCP connection
+    FORCE_WEB_MODE,   // Always stay in WEB mode
+    FORCE_TCP_MODE,   // Always stay in TCP mode
     FORCE_BUTTON_MODE // Always stay in BUTTON mode
 };
 ControlModeLock mode_lock = AUTO_MODE;
@@ -93,8 +102,22 @@ bool status_changed = true;
 // Button control variables
 unsigned long last_button_press = 0;
 const unsigned long button_debounce_delay = 200; // 200ms debounce
-int current_button_gesture = 1; // Default gesture to activate (1 = HandClose)
+int button_primary_gesture = 1;                  // First gesture in the press cycle
+int button_secondary_gesture = 2;                // Second gesture when using three-press cycle
+bool button_use_three_press_cycle = false;
+int button_cycle_state = 0;         // 0 = rest, 1 = primary, 2 = secondary
 bool button_gesture_active = false; // Track if button gesture is active
+
+// Remote button bridge state
+HardwareSerial &button_serial = Serial2;
+WiFiUDP button_udp;
+char button_serial_buffer[64];
+size_t button_serial_buffer_idx = 0;
+bool button_udp_initialized = false;
+unsigned long last_button_bridge_serial_activity = 0;
+unsigned long last_button_bridge_wifi_activity = 0;
+unsigned long last_button_bridge_activity = 0;
+String last_button_bridge_source = "none";
 
 // ==================== HTML Page ====================
 const char *html_page = R"rawliteral(
@@ -157,6 +180,11 @@ const char *html_page = R"rawliteral(
                     <div id="tcp-dot" class="status-dot status-offline"></div>
                     <span id="tcp-status">Waiting...</span>
                 </div>
+                <div class="connection-status">
+                    <span>Button Bridge:</span>
+                    <div id="button-bridge-dot" class="status-dot status-offline"></div>
+                    <span id="button-bridge-status">Waiting for activity...</span>
+                </div>
             </div>
         </div>
 
@@ -211,8 +239,8 @@ const char *html_page = R"rawliteral(
         <div class="section" id="button-mode-config" style="display:none;">
             <h3>Button Mode Configuration</h3>
             <div class="control-row">
-                <label>Active Gesture (1-8):</label>
-                <select id="button-gesture-select" onchange="setButtonGesture()">
+                <label>Primary Gesture:</label>
+                <select id="button-primary-select" onchange="setButtonPrimaryGesture()">
                     <option value="1">HandClose</option>
                     <option value="2">HandOpen</option>
                     <option value="3">HookGrasp</option>
@@ -223,8 +251,33 @@ const char *html_page = R"rawliteral(
                     <option value="8">IndexPointing</option>
                 </select>
             </div>
+            <div class="control-row">
+                <label>Secondary Gesture:</label>
+                <select id="button-secondary-select" onchange="setButtonSecondaryGesture()">
+                    <option value="1">HandClose</option>
+                    <option value="2">HandOpen</option>
+                    <option value="3">HookGrasp</option>
+                    <option value="4">LateralGrasp</option>
+                    <option value="5">ThumbFlexion</option>
+                    <option value="6">IndexFlexion</option>
+                    <option value="7">MRPFlexion</option>
+                    <option value="8">IndexPointing</option>
+                </select>
+            </div>
+            <div class="control-row">
+                <label>Cycle Mode:</label>
+                <select id="button-cycle-mode" onchange="setButtonCycleMode()">
+                    <option value="2">2-press (Primary → Rest)</option>
+                    <option value="3">3-press (Primary → Secondary → Rest)</option>
+                </select>
+            </div>
+            <div class="control-row" style="justify-content: flex-start; gap: 10px;">
+                <div>Current Cycle State:</div>
+                <div class="status-value" id="button-cycle-state-label">Rest</div>
+                <button class="btn-secondary" onclick="resetButtonCycle()">Reset</button>
+            </div>
             <div style="margin-top: 10px; font-size: 12px; color: #666;">
-                Select which gesture will be activated when the button is pressed.
+                Configure how many presses rotate through the primary and secondary gestures before returning to rest.
             </div>
             </div>
         </div>
@@ -334,6 +387,32 @@ const char *html_page = R"rawliteral(
                         tcpDot.className = 'status-dot status-offline';
                         tcpStatus.textContent = 'Waiting for connection...';
                     }
+                    const buttonBridgeDot = document.getElementById('button-bridge-dot');
+                    const buttonBridgeStatus = document.getElementById('button-bridge-status');
+                    if (data.button_bridge) {
+                        const serialActive = !!data.button_bridge.serial_active;
+                        const wifiActive = !!data.button_bridge.wifi_active;
+                        const active = serialActive || wifiActive;
+                        buttonBridgeDot.className = 'status-dot ' + (active ? 'status-online' : 'status-offline');
+                        if (active) {
+                            const channels = [];
+                            if (serialActive) channels.push('Serial');
+                            if (wifiActive) channels.push('WiFi');
+                            let statusText = channels.join(' + ');
+                            if (typeof data.button_bridge.last_ms === 'number' && data.button_bridge.last_ms >= 0) {
+                                const secondsAgo = Math.round(data.button_bridge.last_ms / 1000);
+                                const sourceLabelMap = { SERIAL: 'Serial', UDP: 'WiFi' };
+                                const sourceLabel = sourceLabelMap[data.button_bridge.last_source] || data.button_bridge.last_source || 'unknown';
+                                statusText += ' • last ' + sourceLabel + ' ' + secondsAgo + 's ago';
+                            }
+                            buttonBridgeStatus.textContent = statusText;
+                        } else {
+                            buttonBridgeStatus.textContent = 'No activity';
+                        }
+                    } else {
+                        buttonBridgeDot.className = 'status-dot status-offline';
+                        buttonBridgeStatus.textContent = 'Unavailable';
+                    }
                     
                     // Update real-time status
                     document.getElementById('current-gesture').textContent = gestureNames[data.gesture] || 'Unknown';
@@ -351,6 +430,29 @@ const char *html_page = R"rawliteral(
                     document.getElementById('ext-pressure').value = data.pressure[1];
                     document.getElementById('speed-level').value = data.speed;
                     document.getElementById('finger-states').value = data.finger_states;
+
+                    if (data.button_config) {
+                        const config = data.button_config;
+                        const primarySelect = document.getElementById('button-primary-select');
+                        const secondarySelect = document.getElementById('button-secondary-select');
+                        const cycleModeSelect = document.getElementById('button-cycle-mode');
+                        const cycleStateLabel = document.getElementById('button-cycle-state-label');
+
+                        if (primarySelect) primarySelect.value = String(config.primary);
+                        if (secondarySelect) secondarySelect.value = String(config.secondary);
+                        if (cycleModeSelect) cycleModeSelect.value = config.use_three_press ? '3' : '2';
+                        if (secondarySelect) secondarySelect.disabled = !config.use_three_press;
+
+                        if (cycleStateLabel) {
+                            let label = 'Rest';
+                            if (config.cycle_state === 1) {
+                                label = 'Primary: ' + (gestureNames[config.primary] || 'Gesture ' + config.primary);
+                            } else if (config.cycle_state === 2 && config.use_three_press) {
+                                label = 'Secondary: ' + (gestureNames[config.secondary] || 'Gesture ' + config.secondary);
+                            }
+                            cycleStateLabel.textContent = label;
+                        }
+                    }
                 })
                 .catch(error => console.log('Status update failed:', error));
         }
@@ -409,9 +511,27 @@ const char *html_page = R"rawliteral(
             }
         }
 
-        function setButtonGesture() {
-            const gesture = document.getElementById('button-gesture-select').value;
+        function setButtonPrimaryGesture() {
+            const gesture = document.getElementById('button-primary-select').value;
             sendCommand('button-gesture', `value=${gesture}`);
+        }
+
+        function setButtonSecondaryGesture() {
+            const gesture = document.getElementById('button-secondary-select').value;
+            sendCommand('button-secondary-gesture', `value=${gesture}`);
+        }
+
+        function setButtonCycleMode() {
+            const mode = document.getElementById('button-cycle-mode').value;
+            sendCommand('button-cycle-mode', `value=${mode}`);
+            const secondarySelect = document.getElementById('button-secondary-select');
+            if (secondarySelect) {
+                secondarySelect.disabled = (mode !== '3');
+            }
+        }
+
+        function resetButtonCycle() {
+            sendCommand('button-cycle-reset');
         }
 
         function testTcpServer() {
@@ -445,8 +565,18 @@ const char *html_page = R"rawliteral(
 void initHardware();
 void initNetworks();
 void initDAC();
+void initButtonBridge();
 void handleWebRequests();
 void handleTCPCommands();
+void pollButtonBridgeInterfaces();
+void processButtonCommand(const String &command, const char *source);
+void toggleButtonGesture(const char *source);
+void setButtonGestureActive(bool active, const char *source);
+void advanceButtonCycle(const char *source);
+void setButtonCycleState(int state, const char *source);
+void applyButtonCycleState(const char *source);
+int sanitizeGestureId(int gestureId);
+bool extractButtonCommandValue(const String &normalized, int &value);
 void updateActuators();
 void gestureToFingerStates();
 void setFingerStates();
@@ -468,6 +598,7 @@ void setup()
 
     initHardware();
     initNetworks();
+    initButtonBridge();
     initDAC();
 
     Serial.println("=== System Ready ===");
@@ -573,52 +704,435 @@ void initHardware()
     pinMode(abduction_pin, OUTPUT);
     pinMode(adduction_pin, OUTPUT);
     pinMode(emergency_pin, INPUT_PULLUP);
-    pinMode(button_pin, INPUT_PULLUP); // Button control pin with internal pullup
     digitalWrite(abduction_pin, LOW);
     digitalWrite(adduction_pin, LOW);
 
     Serial.println("Hardware initialized");
 }
 
-// ==================== Button Control Handler ====================
-void handleButtonControl()
+// ==================== Remote Button Bridge ====================
+void initButtonBridge()
 {
-    // Only handle button in BUTTON_MODE
-    if (control_mode != BUTTON_MODE)
+    Serial.println("Initializing remote button bridge...");
+
+    if (button_bridge_serial_enabled)
+    {
+        button_serial.begin(115200, SERIAL_8N1, button_serial_rx_pin, button_serial_tx_pin);
+        button_serial_buffer_idx = 0;
+        button_serial.flush();
+        Serial.print("  Serial bridge RX pin: ");
+        Serial.print(button_serial_rx_pin);
+        Serial.print(", TX pin: ");
+        Serial.println(button_serial_tx_pin);
+    }
+    else
+    {
+        Serial.println("  Serial bridge disabled");
+    }
+
+    if (button_bridge_wifi_enabled)
+    {
+        button_udp_initialized = button_udp.begin(button_udp_port);
+        if (button_udp_initialized)
+        {
+            Serial.print("  UDP bridge listening on port ");
+            Serial.println(button_udp_port);
+        }
+        else
+        {
+            Serial.println("  UDP bridge failed to start");
+        }
+    }
+    else
+    {
+        Serial.println("  UDP bridge disabled");
+    }
+
+    Serial.println("Remote button bridge ready");
+}
+
+void pollButtonBridgeInterfaces()
+{
+    // Serial interface polling
+    if (button_bridge_serial_enabled)
+    {
+        while (button_serial.available())
+        {
+            char incoming = button_serial.read();
+            if (incoming == '\r' || incoming == '\n')
+            {
+                if (button_serial_buffer_idx > 0)
+                {
+                    button_serial_buffer[button_serial_buffer_idx] = '\0';
+                    processButtonCommand(String(button_serial_buffer), "SERIAL");
+                    button_serial_buffer_idx = 0;
+                }
+            }
+            else if (button_serial_buffer_idx < sizeof(button_serial_buffer) - 1)
+            {
+                button_serial_buffer[button_serial_buffer_idx++] = incoming;
+            }
+        }
+    }
+
+    // UDP interface polling
+    if (button_bridge_wifi_enabled && button_udp_initialized)
+    {
+        int packetSize = button_udp.parsePacket();
+        while (packetSize > 0)
+        {
+            char udp_buffer[64];
+            int len = button_udp.read(udp_buffer, sizeof(udp_buffer) - 1);
+            if (len > 0)
+            {
+                udp_buffer[len] = '\0';
+                processButtonCommand(String(udp_buffer), "UDP");
+            }
+            packetSize = button_udp.parsePacket();
+        }
+    }
+
+    // Expire activity state when idle
+    unsigned long now = millis();
+    if (button_bridge_serial_enabled && last_button_bridge_serial_activity > 0 && now - last_button_bridge_serial_activity > button_bridge_activity_timeout)
+    {
+        last_button_bridge_serial_activity = 0;
+    }
+    if (button_bridge_wifi_enabled && last_button_bridge_wifi_activity > 0 && now - last_button_bridge_wifi_activity > button_bridge_activity_timeout)
+    {
+        last_button_bridge_wifi_activity = 0;
+    }
+    if (last_button_bridge_activity > 0 && now - last_button_bridge_activity > button_bridge_activity_timeout)
+    {
+        last_button_bridge_activity = 0;
+        last_button_bridge_source = "none";
+    }
+}
+
+bool extractButtonCommandValue(const String &normalized, int &value)
+{
+    int delimiterIndex = normalized.indexOf(':');
+    if (delimiterIndex < 0)
+    {
+        delimiterIndex = normalized.indexOf('=');
+    }
+    if (delimiterIndex < 0)
+    {
+        delimiterIndex = normalized.indexOf(' ');
+    }
+
+    if (delimiterIndex > 0 && delimiterIndex < normalized.length() - 1)
+    {
+        value = normalized.substring(delimiterIndex + 1).toInt();
+        return true;
+    }
+
+    return false;
+}
+
+void processButtonCommand(const String &rawCommand, const char *source)
+{
+    String command = rawCommand;
+    command.trim();
+    if (command.length() == 0)
     {
         return;
     }
 
-    // Read button state (LOW when pressed, HIGH when released due to INPUT_PULLUP)
-    int button_state = digitalRead(button_pin);
+    unsigned long now = millis();
+    last_button_bridge_activity = now;
+    last_button_bridge_source = source;
 
-    // Check for button press (LOW) with debouncing
-    if (button_state == LOW)
+    if (strcmp(source, "SERIAL") == 0)
     {
-        unsigned long current_time = millis();
-        if (current_time - last_button_press > button_debounce_delay)
-        {
-            last_button_press = current_time;
+        last_button_bridge_serial_activity = now;
+    }
+    else if (strcmp(source, "UDP") == 0)
+    {
+        last_button_bridge_wifi_activity = now;
+    }
 
-            // Toggle between gesture and relax state
-            if (button_gesture_active)
+    String normalized = command;
+    normalized.toUpperCase();
+
+    if (normalized.startsWith("BTN:"))
+    {
+        normalized.remove(0, 4);
+    }
+
+    bool recognized = false;
+
+    if (normalized == "PRESS" || normalized == "P" || normalized == "TOGGLE")
+    {
+        recognized = true;
+        toggleButtonGesture(source);
+    }
+    else if (normalized == "ON")
+    {
+        recognized = true;
+        setButtonGestureActive(true, source);
+    }
+    else if (normalized == "OFF" || normalized == "RELEASE")
+    {
+        recognized = true;
+        setButtonGestureActive(false, source);
+    }
+    else if (normalized.startsWith("GESTURE"))
+    {
+        recognized = true;
+        int requestedGesture = -1;
+        if (extractButtonCommandValue(normalized, requestedGesture))
+        {
+            if (requestedGesture >= 1 && requestedGesture < NUM_GESTURES)
             {
-                // Return to relax state
-                gesture = 0;
-                button_gesture_active = false;
-                Serial.println("Button: Gesture OFF - Relax state");
+                button_primary_gesture = requestedGesture;
+                Serial.printf("[BUTTON][%s] Primary gesture set to %d\n", source, button_primary_gesture);
+                if (control_mode == BUTTON_MODE && button_cycle_state == 1)
+                {
+                    applyButtonCycleState(source);
+                }
             }
             else
             {
-                // Activate selected gesture
-                gesture = current_button_gesture;
-                button_gesture_active = true;
-                Serial.print("Button: Gesture ON - Gesture ");
-                Serial.println(gesture);
+                Serial.printf("[BUTTON][%s] Invalid gesture value: %d\n", source, requestedGesture);
             }
-            status_changed = true;
+        }
+        else
+        {
+            Serial.printf("[BUTTON][%s] Malformed gesture command: %s\n", source, command.c_str());
         }
     }
+    else if (normalized.startsWith("PRIMARY"))
+    {
+        recognized = true;
+        int requestedGesture = -1;
+        if (extractButtonCommandValue(normalized, requestedGesture))
+        {
+            if (requestedGesture >= 1 && requestedGesture < NUM_GESTURES)
+            {
+                button_primary_gesture = requestedGesture;
+                Serial.printf("[BUTTON][%s] Primary gesture set to %d\n", source, button_primary_gesture);
+                if (control_mode == BUTTON_MODE && button_cycle_state == 1)
+                {
+                    applyButtonCycleState(source);
+                }
+            }
+            else
+            {
+                Serial.printf("[BUTTON][%s] Invalid primary gesture: %d\n", source, requestedGesture);
+            }
+        }
+        else
+        {
+            Serial.printf("[BUTTON][%s] Malformed primary command: %s\n", source, command.c_str());
+        }
+    }
+    else if (normalized.startsWith("SECONDARY"))
+    {
+        recognized = true;
+        int requestedGesture = -1;
+        if (extractButtonCommandValue(normalized, requestedGesture))
+        {
+            if (requestedGesture >= 1 && requestedGesture < NUM_GESTURES)
+            {
+                button_secondary_gesture = requestedGesture;
+                Serial.printf("[BUTTON][%s] Secondary gesture set to %d\n", source, button_secondary_gesture);
+                if (control_mode == BUTTON_MODE && button_cycle_state == 2)
+                {
+                    applyButtonCycleState(source);
+                }
+            }
+            else
+            {
+                Serial.printf("[BUTTON][%s] Invalid secondary gesture: %d\n", source, requestedGesture);
+            }
+        }
+        else
+        {
+            Serial.printf("[BUTTON][%s] Malformed secondary command: %s\n", source, command.c_str());
+        }
+    }
+    else if (normalized.startsWith("CYCLE"))
+    {
+        recognized = true;
+        int cycleValue = -1;
+        if (extractButtonCommandValue(normalized, cycleValue))
+        {
+            bool useThreePress = cycleValue >= 3;
+            button_use_three_press_cycle = useThreePress;
+            Serial.printf("[BUTTON][%s] Cycle mode set to %s-press\n", source, useThreePress ? "three" : "two");
+            if (!button_use_three_press_cycle && button_cycle_state == 2)
+            {
+                setButtonCycleState(0, source);
+            }
+        }
+        else
+        {
+            Serial.printf("[BUTTON][%s] Malformed cycle command: %s\n", source, command.c_str());
+        }
+    }
+    else if (normalized == "RESET")
+    {
+        recognized = true;
+        setButtonCycleState(0, source);
+    }
+
+    if (recognized)
+    {
+        status_changed = true;
+    }
+    else
+    {
+        Serial.printf("[BUTTON][%s] Unrecognized command: %s\n", source, command.c_str());
+    }
+}
+
+void toggleButtonGesture(const char *source)
+{
+    if (control_mode != BUTTON_MODE)
+    {
+        Serial.printf("[BUTTON][%s] Command ignored - not in BUTTON mode\n", source);
+        return;
+    }
+
+    unsigned long now = millis();
+    if (now - last_button_press < button_debounce_delay)
+    {
+        return;
+    }
+
+    last_button_press = now;
+
+    advanceButtonCycle(source);
+}
+
+void setButtonGestureActive(bool active, const char *source)
+{
+    if (control_mode != BUTTON_MODE)
+    {
+        Serial.printf("[BUTTON][%s] Command ignored - not in BUTTON mode\n", source);
+        return;
+    }
+
+    unsigned long now = millis();
+    bool isCurrentlyInTargetState = active ? (button_cycle_state == 1) : (button_cycle_state == 0);
+    if (now - last_button_press < button_debounce_delay && isCurrentlyInTargetState)
+    {
+        return;
+    }
+
+    if (active)
+    {
+        last_button_press = now;
+        setButtonCycleState(1, source);
+    }
+    else
+    {
+        last_button_press = now;
+        setButtonCycleState(0, source);
+    }
+}
+
+void advanceButtonCycle(const char *source)
+{
+    int nextState = 0;
+    if (button_use_three_press_cycle)
+    {
+        if (button_cycle_state == 0)
+        {
+            nextState = 1;
+        }
+        else if (button_cycle_state == 1)
+        {
+            nextState = 2;
+        }
+        else
+        {
+            nextState = 0;
+        }
+    }
+    else
+    {
+        nextState = (button_cycle_state == 0) ? 1 : 0;
+    }
+
+    setButtonCycleState(nextState, source);
+}
+
+void setButtonCycleState(int state, const char *source)
+{
+    int sanitizedState = state;
+    if (button_use_three_press_cycle)
+    {
+        sanitizedState = constrain(sanitizedState, 0, 2);
+    }
+    else
+    {
+        sanitizedState = sanitizedState > 0 ? 1 : 0;
+    }
+
+    if (sanitizedState != button_cycle_state)
+    {
+        button_cycle_state = sanitizedState;
+    }
+
+    applyButtonCycleState(source);
+    status_changed = true;
+}
+
+void applyButtonCycleState(const char *source)
+{
+    int desiredGesture = 0;
+    bool desiredActive = false;
+
+    if (button_cycle_state == 1)
+    {
+        desiredGesture = sanitizeGestureId(button_primary_gesture);
+        desiredActive = true;
+    }
+    else if (button_cycle_state == 2 && button_use_three_press_cycle)
+    {
+        desiredGesture = sanitizeGestureId(button_secondary_gesture);
+        desiredActive = true;
+    }
+
+    bool inButtonMode = (control_mode == BUTTON_MODE);
+    bool gestureChanged = inButtonMode && gesture != desiredGesture;
+    bool activeChanged = button_gesture_active != desiredActive;
+
+    if (inButtonMode)
+    {
+        gesture = desiredGesture;
+    }
+
+    button_gesture_active = desiredActive;
+
+    if (gestureChanged || activeChanged)
+    {
+        if (inButtonMode)
+        {
+            if (button_gesture_active)
+            {
+                Serial.printf("[BUTTON][%s] Gesture ON - Gesture %d (cycle state %d)\n", source, gesture, button_cycle_state);
+            }
+            else
+            {
+                Serial.printf("[BUTTON][%s] Gesture OFF - Relax state\n", source);
+            }
+        }
+        status_changed = true;
+    }
+}
+
+int sanitizeGestureId(int gestureId)
+{
+    return constrain(gestureId, 1, NUM_GESTURES - 1);
+}
+
+// ==================== Button Control Handler ====================
+void handleButtonControl()
+{
+    pollButtonBridgeInterfaces();
 }
 
 // ==================== Network Initialization ====================
@@ -716,8 +1230,8 @@ void initNetworks()
 
     server.on("/status", []()
               {
-        StaticJsonDocument<512> json_doc;
-        char json_buffer[512];
+        StaticJsonDocument<768> json_doc;
+        char json_buffer[768];
 
         json_doc["mode"] = (control_mode == TCP_MODE ? "TCP" : 
                            (control_mode == BUTTON_MODE ? "BUTTON" : "WEB"));
@@ -736,6 +1250,22 @@ void initNetworks()
         
         json_doc["speed"] = speed;
         json_doc["finger_states"] = finger_states;
+
+        bool serialActive = button_bridge_serial_enabled && last_button_bridge_serial_activity > 0 && (millis() - last_button_bridge_serial_activity) <= button_bridge_activity_timeout;
+        bool wifiActive = button_bridge_wifi_enabled && last_button_bridge_wifi_activity > 0 && (millis() - last_button_bridge_wifi_activity) <= button_bridge_activity_timeout;
+
+        JsonObject buttonBridge = json_doc.createNestedObject("button_bridge");
+        buttonBridge["serial_active"] = serialActive;
+        buttonBridge["wifi_active"] = wifiActive;
+        buttonBridge["last_source"] = last_button_bridge_source;
+        buttonBridge["last_ms"] = (last_button_bridge_activity > 0) ? (millis() - last_button_bridge_activity) : -1;
+
+    JsonObject buttonConfig = json_doc.createNestedObject("button_config");
+    buttonConfig["primary"] = button_primary_gesture;
+    buttonConfig["secondary"] = button_secondary_gesture;
+    buttonConfig["use_three_press"] = button_use_three_press_cycle;
+    buttonConfig["cycle_state"] = button_cycle_state;
+    buttonConfig["active"] = button_gesture_active;
 
         serializeJson(json_doc, json_buffer);
         server.send(200, "application/json", json_buffer); });
@@ -795,11 +1325,13 @@ void initNetworks()
                     tcpClient.stop();
                     tcp_connected = false;
                 }
+                setButtonCycleState(0, "WEB");
                 Serial.println("Web: Control mode forced to WEB");
             }
             else if (mode == "TCP") {
                 mode_lock = FORCE_TCP_MODE;
                 control_mode = TCP_MODE;
+                setButtonCycleState(0, "WEB");
                 Serial.println("Web: Control mode forced to TCP");
             }
             else if (mode == "BUTTON") {
@@ -811,14 +1343,17 @@ void initNetworks()
                     tcp_connected = false;
                 }
                 // Reset button gesture state when entering button mode
-                button_gesture_active = false;
-                gesture = 0; // Start in relax state
+                setButtonCycleState(0, "WEB");
+                applyButtonCycleState("WEB");
                 Serial.println("Web: Control mode forced to BUTTON");
             }
             else if (mode == "AUTO") {
                 mode_lock = AUTO_MODE;
                 // Let the system decide mode based on current TCP connection
                 control_mode = tcp_connected ? TCP_MODE : WEB_MODE;
+                if (control_mode != BUTTON_MODE) {
+                    setButtonCycleState(0, "WEB");
+                }
                 Serial.println("Web: Control mode set to AUTO");
             }
             status_changed = true;
@@ -833,13 +1368,65 @@ void initNetworks()
     server.on("/button-gesture", []()
               {
         if (server.hasArg("value")) {
-            int new_gesture = server.arg("value").toInt();
-            if (new_gesture >= 1 && new_gesture <= 8) {
-                current_button_gesture = new_gesture;
-                Serial.print("Web: Button gesture set to ");
-                Serial.println(current_button_gesture);
+            int requested = server.arg("value").toInt();
+            if (requested >= 1 && requested < NUM_GESTURES) {
+                button_primary_gesture = requested;
+                Serial.print("Web: Button primary gesture set to ");
+                Serial.println(button_primary_gesture);
+                if (control_mode == BUTTON_MODE && button_cycle_state == 1) {
+                    applyButtonCycleState("WEB");
+                }
+                status_changed = true;
+            }
+            else {
+                Serial.print("Web: Invalid button primary gesture: ");
+                Serial.println(requested);
             }
         }
+        server.send(200, "text/plain", "OK"); });
+
+    server.on("/button-secondary-gesture", []()
+              {
+        if (server.hasArg("value")) {
+            int requested = server.arg("value").toInt();
+            if (requested >= 1 && requested < NUM_GESTURES) {
+                button_secondary_gesture = requested;
+                Serial.print("Web: Button secondary gesture set to ");
+                Serial.println(button_secondary_gesture);
+                if (control_mode == BUTTON_MODE && button_cycle_state == 2) {
+                    applyButtonCycleState("WEB");
+                }
+                status_changed = true;
+            }
+            else {
+                Serial.print("Web: Invalid button secondary gesture: ");
+                Serial.println(requested);
+            }
+        }
+        server.send(200, "text/plain", "OK"); });
+
+    server.on("/button-cycle-mode", []()
+              {
+        if (server.hasArg("value")) {
+            String cycleMode = server.arg("value");
+            cycleMode.trim();
+            cycleMode.toUpperCase();
+
+            bool useThreePress = (cycleMode == "3" || cycleMode == "THREE" || cycleMode == "3PRESS" || cycleMode == "THREE_PRESS");
+            button_use_three_press_cycle = useThreePress;
+            Serial.print("Web: Button cycle mode set to ");
+            Serial.println(useThreePress ? "three-press" : "two-press");
+            if (!button_use_three_press_cycle && button_cycle_state == 2) {
+                setButtonCycleState(0, "WEB");
+            }
+            status_changed = true;
+        }
+        server.send(200, "text/plain", "OK"); });
+
+    server.on("/button-cycle-reset", []()
+              {
+        setButtonCycleState(0, "WEB");
+        status_changed = true;
         server.send(200, "text/plain", "OK"); });
 
     server.on("/tcp-test", []()
