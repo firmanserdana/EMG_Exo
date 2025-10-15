@@ -8,6 +8,8 @@ extern int data_glove;
 extern bool data_glove_initialized;
 extern bool mcp4728_available;
 extern const int pressure_max;
+extern int current_button_gesture;
+extern bool button_gesture_active;
 
 // External function declarations
 void update_pressure();
@@ -139,8 +141,26 @@ const char index_html[] PROGMEM = R"rawliteral(
       <button class="mode" id="serialMode" onclick="setMode(1)">Serial Mode</button>
       <button class="mode" id="dataGloveMode" onclick="setMode(2)">Data Glove</button>
       <button class="mode" id="wifiMode" onclick="setMode(3)">WiFi Control</button>
+      <button class="mode" id="buttonMode" onclick="setMode(4)">Button Control</button>
     </div>
     <p class="status" id="modeStatus">Current mode: HTTP Mode</p>
+    <div id="buttonModeConfig" style="display:none; margin-top: 15px;">
+      <h3>Button Mode Configuration</h3>
+      <div class="control-group">
+        <label>Active Gesture:</label>
+        <select id="buttonGestureSelect" onchange="setButtonGesture()">
+          <option value="1">All Flex</option>
+          <option value="2">All Extend</option>
+          <option value="3">2-Finger Pinch</option>
+          <option value="4">3-Finger Pinch</option>
+          <option value="5">Thumb</option>
+          <option value="6">Index</option>
+          <option value="7">Middle</option>
+          <option value="8">Pinky</option>
+        </select>
+      </div>
+      <p style="font-size: 12px; color: #666;">Push button toggles between selected gesture and relax state</p>
+    </div>
   </div>
   
   <div class="card">
@@ -219,7 +239,7 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
       xhr.onreadystatechange = function() {
         if (xhr.readyState == 4) {
           if (xhr.status == 200) {
-            var modeNames = ["HTTP Mode", "Serial Mode", "Data Glove Mode", "WiFi Control Mode"];
+            var modeNames = ["HTTP Mode", "Serial Mode", "Data Glove Mode", "WiFi Control Mode", "Button Control Mode"];
             document.getElementById('modeStatus').innerHTML = "Current mode: " + modeNames[mode];
             
             // Update button styles
@@ -227,14 +247,19 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             document.getElementById('serialMode').className = "mode";
             document.getElementById('dataGloveMode').className = "mode";
             document.getElementById('wifiMode').className = "mode";
+            document.getElementById('buttonMode').className = "mode";
             
             if (mode == 0) document.getElementById('httpMode').className = "mode active";
             if (mode == 1) document.getElementById('serialMode').className = "mode active";
             if (mode == 2) document.getElementById('dataGloveMode').className = "mode active";
             if (mode == 3) document.getElementById('wifiMode').className = "mode active";
+            if (mode == 4) document.getElementById('buttonMode').className = "mode active";
             
             // Show/hide WiFi instructions
             document.getElementById('wifiInfo').style.display = (mode == 3) ? 'block' : 'none';
+            
+            // Show/hide Button mode configuration
+            document.getElementById('buttonModeConfig').style.display = (mode == 4) ? 'block' : 'none';
           } else {
             document.getElementById('modeStatus').innerHTML = "Error setting mode";
           }
@@ -260,6 +285,14 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
           }
         }
       };
+      xhr.send();
+    }
+    
+    // Set button gesture
+    function setButtonGesture() {
+      var gesture = document.getElementById('buttonGestureSelect').value;
+      var xhr = new XMLHttpRequest();
+      xhr.open("GET", "/setButtonGesture?gesture=" + gesture + "&t=" + new Date().getTime(), true);
       xhr.send();
     }
     
@@ -350,6 +383,7 @@ void init_http_server() {
   server.on("/setPressure", HTTP_GET, handle_set_pressure);
   server.on("/setSpeed", HTTP_GET, handle_set_speed);
   server.on("/setMode", HTTP_GET, handle_set_mode);
+  server.on("/setButtonGesture", HTTP_GET, handle_set_button_gesture);
   
   // Start server
   server.begin();
@@ -458,7 +492,7 @@ void handle_set_mode() {
   if (server.hasArg("mode")) {
     int mode = server.arg("mode").toInt();
     
-    if (mode >= 0 && mode <= 3) {
+    if (mode >= 0 && mode <= 4) {
       if (mode == 0) {
         control_mode = HTTP_MODE;
         data_glove = 0;
@@ -499,6 +533,20 @@ void handle_set_mode() {
         
         Serial.println("[HTTP] Mode set to WiFi Control");
         Serial.println("[HTTP] UDP server ready on port 4210");
+      } else if (mode == 4) {
+        control_mode = BUTTON_MODE;
+        data_glove = 0;
+        
+        // Reset button gesture state when entering button mode
+        button_gesture_active = false;
+        gesture = 0; // Start in relax state
+        
+        // Initialize DAC for pressure and speed in Button mode
+        safe_init_dac();
+        
+        Serial.println("[HTTP] Mode set to Button Control");
+        Serial.print("[HTTP] Button will toggle gesture ");
+        Serial.println(current_button_gesture);
       }
       
       server.send(200, "text/plain", "OK");
@@ -507,5 +555,24 @@ void handle_set_mode() {
     }
   } else {
     server.send(400, "text/plain", "Missing mode parameter");
+  }
+}
+
+void handle_set_button_gesture() {
+  if (server.hasArg("gesture")) {
+    int new_gesture = server.arg("gesture").toInt();
+    
+    if (new_gesture >= 1 && new_gesture <= 8) {
+      current_button_gesture = new_gesture;
+      
+      Serial.print("[HTTP] Button gesture set to: ");
+      Serial.println(current_button_gesture);
+      
+      server.send(200, "text/plain", "OK");
+    } else {
+      server.send(400, "text/plain", "Invalid gesture value");
+    }
+  } else {
+    server.send(400, "text/plain", "Missing gesture parameter");
   }
 }

@@ -33,11 +33,12 @@ const int adduction_pin = 26;
 const int sda_pin = 21;
 const int scl_pin = 22;
 const int emergency_switch_pin = 33;
+const int button_pin = 32; // Push button pin for gesture control (using pin 32 since 33 is emergency)
 
 ////// Define Parameters ////// 
 ///////////////////////////////////////////
 // Define control mode
-enum ControlMode {DATA_GLOVE_MODE, SERIAL_MODE, HTTP_MODE, WIFI_MODE};
+enum ControlMode {DATA_GLOVE_MODE, SERIAL_MODE, HTTP_MODE, WIFI_MODE, BUTTON_MODE};
 
 // Define finger states
 int pressure[2] = {50, 50}; // pressure[0] for flexion, pressure[1] for extension
@@ -71,6 +72,12 @@ bool mpr121_available = false;
 // Performance optimization variables
 unsigned long lastUpdateTime = 0;
 const unsigned long updateInterval = 15; // Update interval reduced from 20ms to 15ms
+
+// Button control variables
+unsigned long last_button_press = 0;
+const unsigned long button_debounce_delay = 200; // 200ms debounce
+int current_button_gesture = 1; // Default gesture to activate (1 = All Flex)
+bool button_gesture_active = false; // Track if button gesture is active
 
 // Function declarations
 void init_http_server();
@@ -139,6 +146,7 @@ void setup() {
     digitalWrite(abduction_pin, LOW);
     digitalWrite(adduction_pin, LOW);
     pinMode(emergency_switch_pin, INPUT_PULLUP);
+    pinMode(button_pin, INPUT_PULLUP); // Button control pin with internal pullup
     
     Serial.println("Pins initialized successfully");
     
@@ -277,6 +285,11 @@ void loop() {
     // Handle WiFi direct commands  
     handle_wifi_direct();
     
+    // Handle button control
+    if (control_mode == BUTTON_MODE) {
+        handle_button_control();
+    }
+    
     // Handle serial commands if available
     if (Serial.available() > 0) {
         serial_read_state();
@@ -317,6 +330,9 @@ void loop() {
         // In WiFi mode, finger_states are updated directly by UDP commands
         // Just ensure they're applied to the output pins
         update_finger_states();
+    } else if (control_mode == BUTTON_MODE) {
+        // In Button mode, gestures are controlled by button press
+        update_hand_gesture();
     } else {
         update_hand_gesture();
     }
@@ -330,4 +346,32 @@ void loop() {
     
     // Yield CPU time to prevent watchdog reset
     yield();
+}
+
+// ==================== Button Control Handler ====================
+void handle_button_control() {
+    // Read button state (LOW when pressed, HIGH when released due to INPUT_PULLUP)
+    int button_state = digitalRead(button_pin);
+
+    // Check for button press (LOW) with debouncing
+    if (button_state == LOW) {
+        unsigned long current_time = millis();
+        if (current_time - last_button_press > button_debounce_delay) {
+            last_button_press = current_time;
+
+            // Toggle between gesture and relax state
+            if (button_gesture_active) {
+                // Return to relax state
+                gesture = 0;
+                button_gesture_active = false;
+                Serial.println("[BUTTON] Gesture OFF - Relax state");
+            } else {
+                // Activate selected gesture
+                gesture = current_button_gesture;
+                button_gesture_active = true;
+                Serial.print("[BUTTON] Gesture ON - Gesture ");
+                Serial.println(gesture);
+            }
+        }
+    }
 }
