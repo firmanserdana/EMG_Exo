@@ -46,6 +46,7 @@ This application consists of five main components:
 - **ESP32 Pneumatic Glove Integration**:
   - Real-time gesture control via TCP/IP communication with persistent connections
   - Task-specific gesture mapping (open_close, grasp_patterns, single_fingers)
+  - **Button Control Mode**: Simple push button interface to toggle between gesture and relax state
   - Configurable pressure and speed settings with real-time adjustment
   - Emergency stop functionality and connection health monitoring
   - Improved connection stability with automatic reconnection
@@ -547,6 +548,28 @@ python test_esp32.py scan
 # Run integration demo
 python integration_demo.py --esp32-only
 ```
+
+#### Button Control Mode
+
+The ESP32 glove now supports a simple button-based control scheme for easy manual operation:
+
+**Setup:**
+```
+1. Connect a push button between GPIO 33 (v2) or GPIO 32 (v1) and GND
+2. Access web interface at http://192.168.4.1
+3. Select "Force BUTTON Mode" 
+4. Choose which gesture to activate from dropdown (1-8)
+5. Press button to toggle between gesture and relax state
+```
+
+**Features:**
+- Simple one-button control
+- Toggle between selected gesture and relax state
+- Configurable gesture selection via web interface
+- 200ms debounce for reliable operation
+- Works independently of other control modes
+
+**See [BUTTON_CONTROL_MODE.md](BUTTON_CONTROL_MODE.md) for detailed documentation.**
 
 ```
 
