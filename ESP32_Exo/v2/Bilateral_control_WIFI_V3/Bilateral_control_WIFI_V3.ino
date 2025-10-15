@@ -26,6 +26,7 @@ const int pinching_pins[5] = {15, 15, 15, 15, 15};   // Pinching control pins
 const int abduction_pin = 15;                      // Abduction pin
 const int adduction_pin = 16;                      // Adduction pin
 const int emergency_pin = 15;                      // Emergency stop pin
+const int button_pin = 33;                         // Push button pin for gesture control
 
 // I2C Configuration
 const int sda_pin = 21;
@@ -36,7 +37,8 @@ const int scl_pin = 22;
 enum ControlMode
 {
     WEB_MODE,
-    TCP_MODE
+    TCP_MODE,
+    BUTTON_MODE
 };
 ControlMode control_mode = WEB_MODE;
 
@@ -45,7 +47,8 @@ enum ControlModeLock
 {
     AUTO_MODE,      // Automatic switching based on TCP connection
     FORCE_WEB_MODE, // Always stay in WEB mode
-    FORCE_TCP_MODE  // Always stay in TCP mode
+    FORCE_TCP_MODE,  // Always stay in TCP mode
+    FORCE_BUTTON_MODE // Always stay in BUTTON mode
 };
 ControlModeLock mode_lock = AUTO_MODE;
 
@@ -86,6 +89,12 @@ int tcp_buffer_idx = 0;
 
 // Status update flags
 bool status_changed = true;
+
+// Button control variables
+unsigned long last_button_press = 0;
+const unsigned long button_debounce_delay = 200; // 200ms debounce
+int current_button_gesture = 1; // Default gesture to activate (1 = HandClose)
+bool button_gesture_active = false; // Track if button gesture is active
 
 // ==================== HTML Page ====================
 const char *html_page = R"rawliteral(
@@ -189,11 +198,34 @@ const char *html_page = R"rawliteral(
             <div class="button-group">
                 <button class="btn-secondary" onclick="setControlMode('WEB')">Force WEB Mode</button>
                 <button class="btn-secondary" onclick="setControlMode('TCP')">Force TCP Mode</button>
+                <button class="btn-secondary" onclick="setControlMode('BUTTON')">Force BUTTON Mode</button>
                 <button class="btn-primary" onclick="setControlMode('AUTO')">Auto Mode</button>
             </div>
             <div style="margin-top: 10px; font-size: 12px; color: #666;">
                 <strong>AUTO:</strong> Mode switches automatically when TCP client connects<br>
-                <strong>FORCE:</strong> Mode stays locked regardless of connections
+                <strong>FORCE:</strong> Mode stays locked regardless of connections<br>
+                <strong>BUTTON:</strong> Push button toggles between gesture and relax state
+            </div>
+        </div>
+
+        <div class="section" id="button-mode-config" style="display:none;">
+            <h3>Button Mode Configuration</h3>
+            <div class="control-row">
+                <label>Active Gesture (1-8):</label>
+                <select id="button-gesture-select" onchange="setButtonGesture()">
+                    <option value="1">HandClose</option>
+                    <option value="2">HandOpen</option>
+                    <option value="3">HookGrasp</option>
+                    <option value="4">LateralGrasp</option>
+                    <option value="5">ThumbFlexion</option>
+                    <option value="6">IndexFlexion</option>
+                    <option value="7">MRPFlexion</option>
+                    <option value="8">IndexPointing</option>
+                </select>
+            </div>
+            <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                Select which gesture will be activated when the button is pressed.
+            </div>
             </div>
         </div>
 
@@ -266,9 +298,20 @@ const char *html_page = R"rawliteral(
                     if (data.mode === 'TCP') {
                         modeElement.className = 'mode-indicator mode-tcp';
                         modeElement.textContent = 'TCP Control Mode (Computer Connected)';
+                    } else if (data.mode === 'BUTTON') {
+                        modeElement.className = 'mode-indicator mode-web';
+                        modeElement.textContent = 'Button Control Mode';
                     } else {
                         modeElement.className = 'mode-indicator mode-web';
                         modeElement.textContent = 'Web Control Mode';
+                    }
+                    
+                    // Show/hide button mode configuration
+                    const buttonModeConfig = document.getElementById('button-mode-config');
+                    if (data.mode === 'BUTTON') {
+                        buttonModeConfig.style.display = 'block';
+                    } else {
+                        buttonModeConfig.style.display = 'none';
                     }
                     
                     // Update connection status
@@ -356,6 +399,19 @@ const char *html_page = R"rawliteral(
             sendCommand('mode', `value=${mode}`);
             // Force immediate status update to reflect changes
             setTimeout(updateStatus, 200);
+            
+            // Show/hide button mode configuration
+            const buttonModeConfig = document.getElementById('button-mode-config');
+            if (mode === 'BUTTON') {
+                buttonModeConfig.style.display = 'block';
+            } else {
+                buttonModeConfig.style.display = 'none';
+            }
+        }
+
+        function setButtonGesture() {
+            const gesture = document.getElementById('button-gesture-select').value;
+            sendCommand('button-gesture', `value=${gesture}`);
         }
 
         function testTcpServer() {
@@ -446,6 +502,9 @@ void loop()
     // Handle TCP commands
     handleTCPCommands();
 
+    // Handle button control
+    handleButtonControl();
+
     // Periodic TCP server status check (every 30 seconds)
     static unsigned long lastServerCheck = 0;
     if (millis() - lastServerCheck > 30000)
@@ -514,10 +573,52 @@ void initHardware()
     pinMode(abduction_pin, OUTPUT);
     pinMode(adduction_pin, OUTPUT);
     pinMode(emergency_pin, INPUT_PULLUP);
+    pinMode(button_pin, INPUT_PULLUP); // Button control pin with internal pullup
     digitalWrite(abduction_pin, LOW);
     digitalWrite(adduction_pin, LOW);
 
     Serial.println("Hardware initialized");
+}
+
+// ==================== Button Control Handler ====================
+void handleButtonControl()
+{
+    // Only handle button in BUTTON_MODE
+    if (control_mode != BUTTON_MODE)
+    {
+        return;
+    }
+
+    // Read button state (LOW when pressed, HIGH when released due to INPUT_PULLUP)
+    int button_state = digitalRead(button_pin);
+
+    // Check for button press (LOW) with debouncing
+    if (button_state == LOW)
+    {
+        unsigned long current_time = millis();
+        if (current_time - last_button_press > button_debounce_delay)
+        {
+            last_button_press = current_time;
+
+            // Toggle between gesture and relax state
+            if (button_gesture_active)
+            {
+                // Return to relax state
+                gesture = 0;
+                button_gesture_active = false;
+                Serial.println("Button: Gesture OFF - Relax state");
+            }
+            else
+            {
+                // Activate selected gesture
+                gesture = current_button_gesture;
+                button_gesture_active = true;
+                Serial.print("Button: Gesture ON - Gesture ");
+                Serial.println(gesture);
+            }
+            status_changed = true;
+        }
+    }
 }
 
 // ==================== Network Initialization ====================
@@ -618,9 +719,11 @@ void initNetworks()
         StaticJsonDocument<512> json_doc;
         char json_buffer[512];
 
-        json_doc["mode"] = (control_mode == TCP_MODE ? "TCP" : "WEB");
+        json_doc["mode"] = (control_mode == TCP_MODE ? "TCP" : 
+                           (control_mode == BUTTON_MODE ? "BUTTON" : "WEB"));
         json_doc["mode_lock"] = (mode_lock == AUTO_MODE ? "AUTO" : 
-                                (mode_lock == FORCE_WEB_MODE ? "FORCE_WEB" : "FORCE_TCP"));
+                                (mode_lock == FORCE_WEB_MODE ? "FORCE_WEB" : 
+                                (mode_lock == FORCE_TCP_MODE ? "FORCE_TCP" : "FORCE_BUTTON")));
         json_doc["sta_connected"] = (WiFi.status() == WL_CONNECTED);
         json_doc["sta_ip"] = WiFi.localIP().toString();
         json_doc["tcp_connected"] = tcp_connected;
@@ -699,6 +802,19 @@ void initNetworks()
                 control_mode = TCP_MODE;
                 Serial.println("Web: Control mode forced to TCP");
             }
+            else if (mode == "BUTTON") {
+                mode_lock = FORCE_BUTTON_MODE;
+                control_mode = BUTTON_MODE;
+                // Disconnect TCP client if connected
+                if (tcp_connected) {
+                    tcpClient.stop();
+                    tcp_connected = false;
+                }
+                // Reset button gesture state when entering button mode
+                button_gesture_active = false;
+                gesture = 0; // Start in relax state
+                Serial.println("Web: Control mode forced to BUTTON");
+            }
             else if (mode == "AUTO") {
                 mode_lock = AUTO_MODE;
                 // Let the system decide mode based on current TCP connection
@@ -712,6 +828,18 @@ void initNetworks()
     server.on("/stop", []()
               {
         emergencyStop();
+        server.send(200, "text/plain", "OK"); });
+
+    server.on("/button-gesture", []()
+              {
+        if (server.hasArg("value")) {
+            int new_gesture = server.arg("value").toInt();
+            if (new_gesture >= 1 && new_gesture <= 8) {
+                current_button_gesture = new_gesture;
+                Serial.print("Web: Button gesture set to ");
+                Serial.println(current_button_gesture);
+            }
+        }
         server.send(200, "text/plain", "OK"); });
 
     server.on("/tcp-test", []()
