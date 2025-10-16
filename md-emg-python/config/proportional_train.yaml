@@ -1,0 +1,56 @@
+# Training Configuration for Proportional Control Decoders
+# =========================================================
+
+# Data settings
+data_file: 'data/healthy/proportional_training_data.npz'  # Training data file
+fsample: 2048  # Sampling frequency in Hz
+
+# Feature extraction
+use_motor_unit_decomposition: false  # Use MUD (true) or raw EMG features (false)
+
+# Control mode
+proportional_control_mode: 'individual_fingers'  # 'individual_fingers' or 'whole_hand'
+num_fingers: 5  # Number of fingers (1-5)
+
+# Data split
+test_size: 0.2  # Test set proportion
+val_size: 0.1  # Validation set proportion (from remaining after test split)
+random_state: 42  # Random seed for reproducibility
+
+# MLP-specific parameters
+hidden_dims: [256, 128, 64]  # Hidden layer dimensions
+dropout: 0.3  # Dropout rate
+activation: 'relu'  # Activation function ('relu', 'tanh', 'elu')
+
+# Training parameters
+batch_size: 32  # Batch size for training
+num_epochs: 100  # Maximum number of epochs
+learning_rate: 0.001  # Initial learning rate
+weight_decay: 0.00001  # L2 regularization
+early_stopping_patience: 15  # Early stopping patience (epochs)
+
+# KNN-specific parameters
+n_neighbors: 5  # Number of neighbors
+weights: 'distance'  # Weight function ('uniform' or 'distance')
+
+# Output
+output_dir: 'models-subjects/healthy'  # Directory to save trained models
+
+# Data augmentation (optional)
+augmentation:
+  enabled: false
+  noise_std: 0.01  # Add Gaussian noise
+  time_shift_samples: 10  # Random time shift
+  amplitude_scale: [0.9, 1.1]  # Random amplitude scaling
+
+# Target normalization
+target_normalization:
+  enabled: true
+  method: 'minmax'  # 'minmax' or 'zscore'
+
+# Advanced settings
+advanced:
+  use_cuda: true  # Use GPU if available
+  num_workers: 4  # DataLoader workers
+  pin_memory: true  # Pin memory for faster GPU transfer
+  gradient_clip: 1.0  # Gradient clipping value (0 to disable)
