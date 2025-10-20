@@ -75,7 +75,7 @@ const char *GESTURE_TO_FINGER_STATES_MAP[] = {
     "011110", // 3: IMRP Flexion (HookGrasp)
     "111110", // 4: 3-finger pinch (LateralGrasp)
     "100000", // 5: Thumb
-    "010000", // 6: Index
+    "020000", // 6: Index
     "001110", // 7: Middle, Ring, Pinky
     "121110"  // 8: Index Pointing
 };
