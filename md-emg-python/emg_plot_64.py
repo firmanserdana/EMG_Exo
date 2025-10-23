@@ -1,6 +1,10 @@
 import os
 import time
 import yaml
+import glob
+import re
+import argparse
+import numpy as np
 from multiprocessing import Process, Queue, Value
 from threading import Thread
 
@@ -12,6 +16,28 @@ from utils.signal_filtering import *
 from utils.communication_64 import *
 from utils.network_utils import *
 from utils.data_utils import *
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="EMG acquisition pipeline with optional decoding/control."
+    )
+    parser.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="Disable decoding/control loops so the script only streams EMG for plotting.",
+    )
+    parser.add_argument(
+        "--save-emg",
+        action="store_true",
+        help="Persist streamed EMG buffers to disk alongside plotting.",
+    )
+    parser.add_argument(
+        "--save-dir",
+        default=None,
+        help="Directory where EMG buffers will be stored (defaults to subject data folder).",
+    )
+    return parser.parse_args()
 
 # Thread for saving the predictions made by the model
 def StorePredictionLoop(pred_save_queue):
@@ -29,29 +55,46 @@ def StorePredictionLoop(pred_save_queue):
     print('Prediction saving loop stopped')
 
 # Thread for saving the EMG raw data recorded
-def SaveData(save_queue):
+def SaveData(save_queue, save_enabled=False, session_file=None, dtype=np.float32):
     print('Starting the saving loop')
 
-    while True:  
-        try:
-            data = save_queue.get()
+    file_handle = None
+    try:
+        if save_enabled and session_file:
+            os.makedirs(os.path.dirname(session_file), exist_ok=True)
+            file_handle = open(session_file, 'ab')
 
-            if data is not None:
-                continue  # just clearing the queue
-            else:
+        while True:
+            try:
+                data = save_queue.get()
+
+                if data is None:
+                    break
+
+                if save_enabled and file_handle:
+                    np.save(file_handle, data.astype(dtype))
+            except KeyboardInterrupt:
                 break
-        except KeyboardInterrupt:
-            break
+    finally:
+        if file_handle:
+            file_handle.close()
+
+    if save_enabled and session_file:
+        print(f"Saved EMG session to {session_file}")
 
     print('Saving loop stopped')
 
 # ------ MAIN ------
 if __name__ == "__main__":
+    args = parse_args()
     # TODO: move this to the parameters input of the script - since it's based on the type of decoding being performed
-    subj_type = 'SCI' # 'healthy' or 'SCI' - TODO: make this a parameter of the script
-    subj = 6 # TODO: make this a parameter of the script
+    subj_type = 'healthy' # 'healthy' or 'SCI' - TODO: make this a parameter of the script
+    subj = 0 # TODO: make this a parameter of the script
     task = 'open_close' # options: ['open_close','grasp_patterns','single_fingers'] - TODO: make this a parameter of the script
     decoding_active = True # TODO: make this a parameter of the script
+    if args.plot_only:
+        # Plot-only mode disables decoding/control loops so only EMG streaming remains active
+        decoding_active = False
     model_version = 'open_loop' # options ['open_loop','both'] - TODO: make this a parameter of the script
 
     subj_id = f'S{subj}'
@@ -99,7 +142,10 @@ if __name__ == "__main__":
         pred_save_queue = Queue() # predictions queue for the saving of the predictions
 
     # queue for the streaming data
-    stream_queue = Queue()
+    # Stream settings control whether EMG samples are forwarded to the GUI/VR stack
+    stream_cfg = emg_proc_cfg.get('stream', {})
+    streaming_enabled = stream_cfg.get('enabled', True)
+    stream_queue = Queue() if streaming_enabled else None
 
     # Open connection to the amplifier      
     num_channels_emg = emg_proc_cfg['num_channels_emg'] # number of EMG channels to be used       
@@ -118,7 +164,7 @@ if __name__ == "__main__":
         'bytes_in_sample': bytes_in_sample,
         'notch': emg_proc_cfg['notch'] if 'notch' in emg_proc_cfg else False,
         'bandpass': emg_proc_cfg['bandpass'] if 'bandpass' in emg_proc_cfg else False,
-        'streaming_active': True,
+        'streaming_active': streaming_enabled,
         'proc_interval': emg_proc_cfg['processing_interval']
     }
 
@@ -181,23 +227,45 @@ if __name__ == "__main__":
             print("Failed to connect to the events server. Exiting the program.")
             exit()
 
-    # opening the streaming socket
-    stream_socket = socket_connect(
-        host=emg_proc_cfg['stream']['sender']['host'], 
-        port=emg_proc_cfg['stream']['sender']['port'],
-        timeout=emg_proc_cfg['stream']['timeout']
-    )
+    # opening the streaming socket (if enabled)
+    stream_socket = None
+    if streaming_enabled:
+        stream_socket = socket_connect(
+            host=emg_proc_cfg['stream']['sender']['host'], 
+            port=emg_proc_cfg['stream']['sender']['port'],
+            timeout=emg_proc_cfg['stream']['timeout']
+        )
 
-    if stream_socket is None:
-        print("Failed to connect to the streaming server. Exiting the program.")
-        exit()
+        if stream_socket is None:
+            print("Failed to connect to the streaming server. Exiting the program.")
+            exit()
 
     # starting the sub-processes
     p_acquisition = Process(
         target=AcquisitionLoop, 
         args=(conn_64, acq_params, dec_params, dec_queue, save_queue, stop_program, decoding_active, is_decoding, stream_queue)
     )
-    p_datasave = Thread(target=SaveData, args=(save_queue,)) # better using Thread for I/O workers      
+    save_enabled = args.save_emg
+    save_directory = args.save_dir or os.path.join(data_folder, 'emg_logs')
+    session_file = None
+    if save_enabled:
+        os.makedirs(save_directory, exist_ok=True)
+
+        existing_sessions = sorted(glob.glob(os.path.join(save_directory, 'session_[0-9]*.npy')))
+
+        if not existing_sessions:
+            session_index = 0
+        else:
+            session_match = re.search(r'session_(\d+)\.npy', os.path.basename(existing_sessions[-1]))
+            session_index = int(session_match.group(1)) + 1 if session_match else 0
+
+        session_file = os.path.join(save_directory, f'session_{session_index:02d}.npy')
+        print(f"EMG session will be saved to: {session_file}")
+    p_datasave = Thread(
+        target=SaveData,
+        args=(save_queue, save_enabled, session_file),
+        kwargs={"dtype": np.float32},
+    ) # better using Thread for I/O workers
     
     if decoding_active:
         p_decoding = Process(
@@ -213,10 +281,12 @@ if __name__ == "__main__":
             args=(pred_save_queue,)
         )
 
-    p_stream = Thread(
-        target=StreamDataLoop, 
-        args=(stream_socket, stream_queue, stop_program)
-    )
+    p_stream = None
+    if streaming_enabled:
+        p_stream = Thread(
+            target=StreamDataLoop, 
+            args=(stream_socket, stream_queue, stop_program)
+        )
     
     print(f'\nStarting the acquisition system: {num_channels_emg} channels with {fsample} sampling rate')
 
@@ -228,7 +298,8 @@ if __name__ == "__main__":
         p_control.start()
         p_pred_save.start()
 
-    p_stream.start()
+    if p_stream:
+        p_stream.start()
 
     time.sleep(2.5) # wait for the processes to start
 
@@ -244,9 +315,9 @@ if __name__ == "__main__":
 
     time.sleep(2) # sleep for allowing the threads to complete the saving
 
-    print("Events socket closed")
-
     if decoding_active:
+        print("Events socket closed")
+
         if p_decoding.is_alive():
             p_decoding.terminate()
 
@@ -256,8 +327,9 @@ if __name__ == "__main__":
         if p_pred_save.is_alive():
             p_pred_save.join()
 
-    socket_close(stream_socket)
-    print("Streaming socket closed")
+    if streaming_enabled and stream_socket is not None:
+        socket_close(stream_socket)
+        print("Streaming socket closed")
 
     if p_acquisition.is_alive():
         p_acquisition.terminate()
