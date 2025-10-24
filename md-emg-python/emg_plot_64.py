@@ -89,7 +89,7 @@ if __name__ == "__main__":
     args = parse_args()
     # TODO: move this to the parameters input of the script - since it's based on the type of decoding being performed
     subj_type = 'healthy' # 'healthy' or 'SCI' - TODO: make this a parameter of the script
-    subj = 0 # TODO: make this a parameter of the script
+    subj = 5 # TODO: make this a parameter of the script
     task = 'open_close' # options: ['open_close','grasp_patterns','single_fingers'] - TODO: make this a parameter of the script
     decoding_active = True # TODO: make this a parameter of the script
     if args.plot_only:
