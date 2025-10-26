@@ -196,3 +196,5 @@ debug/**/*.csv
 
 # Ignore all .gitkeep files in any directory
 !**/.gitkeep
+
+*.csv
