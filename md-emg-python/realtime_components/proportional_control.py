@@ -34,7 +34,7 @@ def ProportionalControlLoop(
     continuous speed and force values.
     
     Args:
-        events_socket: TCP socket for Unity communication
+        events_socket: TCP socket for Unity communication (can be None if Unity not connected)
         control_params (dict): Control parameters
         prop_control_queue (Queue): Input queue with proportional control data
         stop_program (Value): Stop flag
@@ -64,11 +64,18 @@ def ProportionalControlLoop(
     last_unity_update = 0
     last_esp32_update = 0
     
+    # Unity connection status
+    unity_connected = events_socket is not None
+    
     print(f"Control mode: {control_mode}")
     print(f"Min update interval: {min_update_interval}s ({1/min_update_interval:.1f} Hz max)")
+    print(f"Unity connected: {unity_connected}")
     
     def send_to_unity_async(data, socket):
         """Send proportional control data to Unity."""
+        if socket is None:
+            return  # Skip if Unity not connected
+            
         try:
             # Create Unity event for proportional control
             event = {
@@ -98,18 +105,25 @@ def ProportionalControlLoop(
             performance_stats['errors_count'] += 1
     
     def should_update(last_data, new_data, threshold=0.05):
-        """Check if update is significant enough to send."""
+        """Check if update is significant enough to send (improved finger-by-finger comparison)."""
         if last_data is None:
             return True
         
-        # Compare finger control values
+        # Compare finger control values by finger name
         max_diff = 0.0
-        for finger in new_data.get('fingers', {}).values():
-            for last_finger in last_data.get('fingers', {}).values():
-                for key in ['flexion', 'extension', 'force']:
-                    if key in finger and key in last_finger:
-                        diff = abs(finger.get(key, 0) - last_finger.get(key, 0))
-                        max_diff = max(max_diff, diff)
+        new_fingers = new_data.get('fingers', {})
+        last_fingers = last_data.get('fingers', {})
+        
+        for finger_name, new_finger_vals in new_fingers.items():
+            last_finger_vals = last_fingers.get(finger_name, {})
+            
+            # Compare key control values for this specific finger
+            for key in ['flexion_speed', 'extension_speed', 'force']:
+                if key in new_finger_vals:
+                    new_val = float(new_finger_vals.get(key, 0))
+                    last_val = float(last_finger_vals.get(key, 0))
+                    diff = abs(new_val - last_val)
+                    max_diff = max(max_diff, diff)
         
         return max_diff > threshold
     
@@ -126,8 +140,8 @@ def ProportionalControlLoop(
         current_time = time.perf_counter()
         performance_stats['commands_processed'] += 1
         
-        # Send to Unity
-        if control_mode in ['synchronized', 'unity_only']:
+        # Send to Unity (only if connected)
+        if unity_connected and control_mode in ['synchronized', 'unity_only']:
             # Rate limiting
             if current_time - last_unity_update >= min_update_interval:
                 # Check if update is significant
