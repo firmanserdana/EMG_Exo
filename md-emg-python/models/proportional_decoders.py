@@ -111,7 +111,7 @@ class KNNProportionalDecoder:
     Simple instance-based learning for proportional control.
     """
     
-    def __init__(self, n_neighbors=5, weights='distance', output_dim=10):
+    def __init__(self, n_neighbors=5, weights='distance', output_dim=10, verbose=False):
         """
         Initialize KNN decoder.
         
@@ -119,10 +119,12 @@ class KNNProportionalDecoder:
             n_neighbors (int): Number of neighbors to consider
             weights (str): Weight function ('uniform' or 'distance')
             output_dim (int): Number of output dimensions
+            verbose (bool): Whether to print detailed logging messages
         """
         self.n_neighbors = n_neighbors
         self.weights = weights
         self.output_dim = output_dim
+        self.verbose = verbose
         
         # Initialize KNN regressor (multi-output)
         self.knn = KNeighborsRegressor(
@@ -153,7 +155,8 @@ class KNNProportionalDecoder:
         
         self.is_fitted = True
         
-        print(f"KNN decoder fitted: {X.shape[0]} samples, {X.shape[1]} features, {y.shape[1]} outputs")
+        if self.verbose:
+            print(f"KNN decoder fitted: samples={X.shape[0]}, features={X.shape[1]}, outputs={y.shape[1]}")
     
     def predict(self, X):
         """
@@ -190,6 +193,7 @@ class KNNProportionalDecoder:
                 'n_neighbors': self.n_neighbors,
                 'weights': self.weights,
                 'output_dim': self.output_dim,
+                'verbose': self.verbose,
                 'is_fitted': self.is_fitted
             }, f)
     
@@ -202,6 +206,7 @@ class KNNProportionalDecoder:
             self.n_neighbors = data['n_neighbors']
             self.weights = data['weights']
             self.output_dim = data['output_dim']
+            self.verbose = data.get('verbose', False)
             self.is_fitted = data['is_fitted']
 
 
@@ -283,8 +288,17 @@ class ProportionalControlMapper:
         """Decode whole-hand control."""
         finger_names = ['thumb', 'index', 'middle', 'ring', 'pinky']
         
-        flexion_val = float(values[0])
-        extension_val = float(values[1])
+        # Validate input for whole-hand mode
+        if np.ndim(values) == 0:
+            # Handle scalar input - use same value for both flexion and extension
+            flexion_val = float(values)
+            extension_val = float(values)
+        else:
+            # Handle array input - should have exactly 2 values
+            if len(values) != 2:
+                raise ValueError(f"Whole-hand mode expects exactly 2 values [flexion, extension], got {len(values)}")
+            flexion_val = float(values[0])
+            extension_val = float(values[1])
         
         # Apply same values to all fingers
         result = {}
