@@ -189,7 +189,14 @@ def connect_to_unity(tcp_server_config, max_retries=3, retry_delay=1):
             if attempt < max_retries - 1:
                 time.sleep(retry_delay)
     
-    logger.warning("Could not connect to Unity. Continuing without Unity visualization...")
+    logger.warning("⚠ Could not connect to Unity. Continuing without Unity visualization...")
+    
+    # Close the socket since connection failed
+    try:
+        events_socket.close()
+    except:
+        pass
+    
     return None
 
 
@@ -358,7 +365,7 @@ def main():
     dec_params = dict(prop_config)
     dec_params['fsample'] = fsample
     
-    # Connect to Unity
+    # Connect to Unity (returns None if connection fails)
     events_socket = connect_to_unity(tcp_server_config)
     
     # Setup ESP32 controller if enabled
@@ -366,7 +373,7 @@ def main():
     if esp32_config['enabled']:
         esp32_controller = setup_esp32_controller(esp32_config)
         if esp32_controller is None:
-            logger.warning("ESP32 setup failed. Continuing without ESP32 control...")
+            logger.warning("⚠ ESP32 setup failed. Continuing without ESP32 control...")
             esp32_config['enabled'] = False
     
     # Process list for signal handling
@@ -412,21 +419,20 @@ def main():
         )
         data_save_thread.start()
         
-        # Start proportional control process
-        if events_socket:
-            logger.info("Starting proportional control process...")
-            control_params = {
-                'control_mode': 'synchronized',
-                'min_update_interval': prop_config.get('min_update_interval', 0.05)
-            }
-            
-            control_process = Process(
-                target=ProportionalControlLoop,
-                args=(events_socket, control_params, prop_control_queue, stop_program,
-                      prop_esp32_queue, unity_events_queue)
-            )
-            control_process.start()
-            processes.append(control_process)
+        # Start proportional control process (handles both Unity and ESP32 routing)
+        logger.info("Starting proportional control process...")
+        control_params = {
+            'control_mode': prop_config.get('control_mode', 'synchronized'),  # Use config value
+            'min_update_interval': prop_config.get('min_update_interval', 0.05)
+        }
+        
+        control_process = Process(
+            target=ProportionalControlLoop,
+            args=(events_socket, control_params, prop_control_queue, stop_program,
+                  prop_esp32_queue, unity_events_queue)
+        )
+        control_process.start()
+        processes.append(control_process)
         
         # Start ESP32 control process
         esp32_process = None
