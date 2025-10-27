@@ -28,13 +28,13 @@ public class ProportionalHandController : MonoBehaviour
     public float maxFlexionAngle = 90.0f;
     public float maxExtensionAngle = 0.0f;
     
-    // Current finger states (per finger)
-    private float[] currentFlexion = new float[5];
-    private float[] currentExtension = new float[5];
-    private float[] currentForce = new float[5];
-    private float[] targetFlexion = new float[5];
-    private float[] targetExtension = new float[5];
-    private float[] targetForce = new float[5];
+    // Current finger states (per finger) - properly initialized in Start()
+    private float[] currentFlexion;
+    private float[] currentExtension;
+    private float[] currentForce;
+    private float[] targetFlexion;
+    private float[] targetExtension;
+    private float[] targetForce;
     
     // Joint references per finger
     private List<Transform[]> fingerJoints = new List<Transform[]>();
@@ -42,14 +42,35 @@ public class ProportionalHandController : MonoBehaviour
     private List<Quaternion[]> flexedRotations = new List<Quaternion[]>();
     
     // Finger names for mapping
-    private string[] fingerNames = { "Thumb", "Index", "Middle", "Ring", "Pinky" };
+    private string[] fingerNames = { "thumb", "index", "middle", "ring", "pinky" };
+    
+    // Number of active fingers (determined at runtime)
+    private int numFingers;
     
     void Start()
     {
+        // Validate fingers array
+        if (fingers == null || fingers.Length == 0)
+        {
+            Debug.LogError("ProportionalHandController: No fingers assigned! Please assign finger transforms in the inspector.");
+            enabled = false;
+            return;
+        }
+        
+        numFingers = fingers.Length;
+        
+        // Initialize arrays with proper size
+        currentFlexion = new float[numFingers];
+        currentExtension = new float[numFingers];
+        currentForce = new float[numFingers];
+        targetFlexion = new float[numFingers];
+        targetExtension = new float[numFingers];
+        targetForce = new float[numFingers];
+        
         InitializeFingerJoints();
         InitializeRotations();
         
-        Debug.Log("ProportionalHandController initialized with " + fingers.Length + " fingers");
+        Debug.Log($"ProportionalHandController initialized with {numFingers} fingers");
     }
     
     void InitializeFingerJoints()
@@ -57,23 +78,41 @@ public class ProportionalHandController : MonoBehaviour
         // Store joints for each finger
         foreach (Transform finger in fingers)
         {
-            Transform[] joints = finger.GetComponentsInChildren<Transform>();
-            fingerJoints.Add(joints);
+            if (finger != null)
+            {
+                Transform[] joints = finger.GetComponentsInChildren<Transform>();
+                fingerJoints.Add(joints);
+            }
+            else
+            {
+                Debug.LogWarning("ProportionalHandController: Null finger transform found!");
+                fingerJoints.Add(new Transform[0]);
+            }
         }
     }
     
     void InitializeRotations()
     {
         // Store initial (extended) and flexed rotations
-        for (int i = 0; i < fingers.Length; i++)
+        for (int i = 0; i < numFingers; i++)
         {
+            if (i >= fingerJoints.Count || fingerJoints[i] == null)
+            {
+                initialRotations.Add(new Quaternion[0]);
+                flexedRotations.Add(new Quaternion[0]);
+                continue;
+            }
+            
             Transform[] joints = fingerJoints[i];
             
             // Initial rotations (extended state)
             Quaternion[] initRots = new Quaternion[joints.Length];
             for (int j = 0; j < joints.Length; j++)
             {
-                initRots[j] = joints[j].localRotation;
+                if (joints[j] != null)
+                {
+                    initRots[j] = joints[j].localRotation;
+                }
             }
             initialRotations.Add(initRots);
             
@@ -81,9 +120,16 @@ public class ProportionalHandController : MonoBehaviour
             Quaternion[] flexRots = new Quaternion[joints.Length];
             for (int j = 0; j < joints.Length; j++)
             {
-                // Apply flexion rotation around local X axis
-                float flexAngle = maxFlexionAngle / joints.Length; // Distribute across joints
-                flexRots[j] = initRots[j] * Quaternion.Euler(flexAngle, 0, 0);
+                if (joints[j] != null)
+                {
+                    // Apply flexion rotation around local X axis
+                    float flexAngle = maxFlexionAngle / joints.Length; // Distribute across joints
+                    flexRots[j] = initRots[j] * Quaternion.Euler(flexAngle, 0, 0);
+                }
+                else
+                {
+                    flexRots[j] = initRots[j];
+                }
             }
             flexedRotations.Add(flexRots);
         }
@@ -92,7 +138,7 @@ public class ProportionalHandController : MonoBehaviour
     void Update()
     {
         // Smooth interpolation towards target values
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < numFingers; i++)
         {
             currentFlexion[i] = Mathf.Lerp(currentFlexion[i], targetFlexion[i], smoothingFactor);
             currentExtension[i] = Mathf.Lerp(currentExtension[i], targetExtension[i], smoothingFactor);
@@ -111,12 +157,16 @@ public class ProportionalHandController : MonoBehaviour
     /// </summary>
     public void SetFingerControl(string fingerName, float flexion, float extension, float force)
     {
-        int fingerIndex = Array.IndexOf(fingerNames, fingerName);
-        if (fingerIndex >= 0 && fingerIndex < 5)
+        int fingerIndex = Array.IndexOf(fingerNames, fingerName.ToLower());
+        if (fingerIndex >= 0 && fingerIndex < numFingers)
         {
             targetFlexion[fingerIndex] = Mathf.Clamp01(flexion) * speedMultiplier;
             targetExtension[fingerIndex] = Mathf.Clamp01(extension) * speedMultiplier;
             targetForce[fingerIndex] = Mathf.Clamp01(force) * forceMultiplier;
+        }
+        else
+        {
+            Debug.LogWarning($"ProportionalHandController: Unknown or invalid finger '{fingerName}' (index: {fingerIndex})");
         }
     }
     
@@ -125,7 +175,7 @@ public class ProportionalHandController : MonoBehaviour
     /// </summary>
     public void SetAllFingersControl(float flexion, float extension, float force)
     {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < numFingers; i++)
         {
             targetFlexion[i] = Mathf.Clamp01(flexion) * speedMultiplier;
             targetExtension[i] = Mathf.Clamp01(extension) * speedMultiplier;
@@ -138,7 +188,7 @@ public class ProportionalHandController : MonoBehaviour
     /// </summary>
     private void UpdateFingerRotations()
     {
-        for (int fingerIdx = 0; fingerIdx < Mathf.Min(fingers.Length, 5); fingerIdx++)
+        for (int fingerIdx = 0; fingerIdx < Mathf.Min(fingers.Length, numFingers); fingerIdx++)
         {
             // Calculate net flexion (flexion - extension)
             float netFlexion = currentFlexion[fingerIdx] - currentExtension[fingerIdx];
@@ -148,13 +198,21 @@ public class ProportionalHandController : MonoBehaviour
             float flexionAmount = (netFlexion + 1.0f) / 2.0f;
             
             // Interpolate between extended and flexed rotations
-            Transform[] joints = fingerJoints[fingerIdx];
-            for (int jointIdx = 0; jointIdx < joints.Length; jointIdx++)
+            if (fingerIdx < fingerJoints.Count && fingerJoints[fingerIdx] != null)
             {
-                Quaternion extRot = initialRotations[fingerIdx][jointIdx];
-                Quaternion flexRot = flexedRotations[fingerIdx][jointIdx];
-                
-                joints[jointIdx].localRotation = Quaternion.Slerp(extRot, flexRot, flexionAmount);
+                Transform[] joints = fingerJoints[fingerIdx];
+                for (int jointIdx = 0; jointIdx < joints.Length; jointIdx++)
+                {
+                    if (joints[jointIdx] != null &&
+                        fingerIdx < initialRotations.Count && fingerIdx < flexedRotations.Count &&
+                        jointIdx < initialRotations[fingerIdx].Length && jointIdx < flexedRotations[fingerIdx].Length)
+                    {
+                        Quaternion extRot = initialRotations[fingerIdx][jointIdx];
+                        Quaternion flexRot = flexedRotations[fingerIdx][jointIdx];
+                        
+                        joints[jointIdx].localRotation = Quaternion.Slerp(extRot, flexRot, flexionAmount);
+                    }
+                }
             }
         }
     }
@@ -167,7 +225,7 @@ public class ProportionalHandController : MonoBehaviour
         if (fingerMaterials == null || fingerMaterials.Length == 0)
             return;
         
-        for (int i = 0; i < Mathf.Min(fingerMaterials.Length, 5); i++)
+        for (int i = 0; i < Mathf.Min(fingerMaterials.Length, numFingers); i++)
         {
             if (fingerMaterials[i] != null)
             {
@@ -183,7 +241,7 @@ public class ProportionalHandController : MonoBehaviour
     /// </summary>
     public void ResetFingers()
     {
-        for (int i = 0; i < 5; i++)
+        for (int i = 0; i < numFingers; i++)
         {
             targetFlexion[i] = 0.0f;
             targetExtension[i] = 0.0f;
@@ -199,7 +257,7 @@ public class ProportionalHandController : MonoBehaviour
     /// </summary>
     public void GetFingerState(int fingerIndex, out float flexion, out float extension, out float force)
     {
-        if (fingerIndex >= 0 && fingerIndex < 5)
+        if (fingerIndex >= 0 && fingerIndex < numFingers)
         {
             flexion = currentFlexion[fingerIndex];
             extension = currentExtension[fingerIndex];
@@ -207,6 +265,7 @@ public class ProportionalHandController : MonoBehaviour
         }
         else
         {
+            Debug.LogWarning($"ProportionalHandController: Invalid finger index {fingerIndex} (valid range: 0-{numFingers-1})");
             flexion = extension = force = 0.0f;
         }
     }
@@ -220,30 +279,61 @@ public class ProportionalHandController : MonoBehaviour
         {
             if (eventData.ContainsKey("fingers"))
             {
-                Dictionary<string, object> fingers = eventData["fingers"] as Dictionary<string, object>;
+                // Avoid shadowing the fingers field by using a different variable name
+                var fingersDict = eventData["fingers"] as Dictionary<string, object>;
                 
-                foreach (var finger in fingers)
+                if (fingersDict == null)
                 {
-                    string fingerName = finger.Key;
-                    Dictionary<string, object> control = finger.Value as Dictionary<string, object>;
+                    Debug.LogWarning("ProportionalHandController: Invalid fingers data format");
+                    return;
+                }
+                
+                foreach (var fingerEntry in fingersDict)
+                {
+                    string fingerName = fingerEntry.Key;
+                    var control = fingerEntry.Value as Dictionary<string, object>;
                     
                     if (control != null)
                     {
-                        float flexion = control.ContainsKey("flexion_speed") ? 
-                            Convert.ToSingle(control["flexion_speed"]) : 0f;
-                        float extension = control.ContainsKey("extension_speed") ? 
-                            Convert.ToSingle(control["extension_speed"]) : 0f;
-                        float force = control.ContainsKey("force") ? 
-                            Convert.ToSingle(control["force"]) : 0f;
+                        // Safe type conversion with fallback values
+                        float flexion = 0f;
+                        float extension = 0f;
+                        float force = 0f;
+                        
+                        if (control.ContainsKey("flexion_speed"))
+                        {
+                            if (float.TryParse(control["flexion_speed"].ToString(), out float f))
+                                flexion = f;
+                        }
+                        
+                        if (control.ContainsKey("extension_speed"))
+                        {
+                            if (float.TryParse(control["extension_speed"].ToString(), out float e))
+                                extension = e;
+                        }
+                        
+                        if (control.ContainsKey("force"))
+                        {
+                            if (float.TryParse(control["force"].ToString(), out float fr))
+                                force = fr;
+                        }
                         
                         SetFingerControl(fingerName, flexion, extension, force);
                     }
+                    else
+                    {
+                        Debug.LogWarning($"ProportionalHandController: Invalid control data for finger '{fingerName}'");
+                    }
                 }
+            }
+            else
+            {
+                Debug.LogWarning("ProportionalHandController: Event data missing 'fingers' key");
             }
         }
         catch (Exception e)
         {
-            Debug.LogError("Error handling proportional control event: " + e.Message);
+            Debug.LogError($"ProportionalHandController: Error handling proportional control event: {e.Message}");
         }
     }
 }
