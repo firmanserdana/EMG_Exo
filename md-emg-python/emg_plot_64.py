@@ -4,9 +4,17 @@ import yaml
 import glob
 import re
 import argparse
+import json
+import threading
 import numpy as np
 from multiprocessing import Process, Queue, Value
 from threading import Thread
+from datetime import datetime
+try:
+    import keyboard
+except ImportError:
+    print("Warning: keyboard module not installed. Install with: pip install keyboard")
+    keyboard = None
 
 from realtime_components.acquisition import AcquisitionLoop
 from realtime_components.decoding import *
@@ -37,7 +45,87 @@ def parse_args():
         default=None,
         help="Directory where EMG buffers will be stored (defaults to subject data folder).",
     )
+    parser.add_argument(
+        "--enable-gestures",
+        action="store_true",
+        help="Enable gesture timestamp marking with space bar.",
+    )
     return parser.parse_args()
+
+# Global variables for timestamp marking
+gesture_timestamps = []
+timestamp_lock = threading.Lock()
+start_time = None
+gesture_counter = 0
+
+def keyboard_listener(stop_program, enable_gestures):
+    """
+    Listen for keyboard events to mark gesture timestamps.
+    Press SPACE to mark when a gesture occurs.
+    """
+    global gesture_timestamps, gesture_counter, start_time
+    
+    if not keyboard or not enable_gestures:
+        return
+        
+    print("\n=== GESTURE MARKING ENABLED ===")
+    print("Press SPACE when a gesture occurs to mark the timestamp")
+    print("Timestamps will be saved alongside EMG data")
+    print("================================\n")
+    
+    while not stop_program.value:
+        try:
+            # Check for space bar press
+            if keyboard.is_pressed('space'):
+                if start_time is not None:
+                    current_time = time.time()
+                    relative_timestamp = current_time - start_time
+                    
+                    with timestamp_lock:
+                        gesture_counter += 1
+                        timestamp_data = {
+                            'gesture_id': gesture_counter,
+                            'timestamp': relative_timestamp,
+                            'absolute_time': datetime.now().isoformat(),
+                            'description': f'Gesture {gesture_counter}'
+                        }
+                        gesture_timestamps.append(timestamp_data)
+                        
+                    print(f"\n*** GESTURE {gesture_counter} MARKED at {relative_timestamp:.3f}s ***")
+                    
+                    # Prevent multiple rapid triggers
+                    time.sleep(0.5)
+                    
+            time.sleep(0.05)  # Small delay to prevent high CPU usage
+            
+        except Exception as e:
+            print(f"Error in keyboard listener: {e}")
+            break
+
+def save_timestamps(session_file, timestamps):
+    """
+    Save gesture timestamps to a JSON file alongside the EMG data.
+    """
+    if not timestamps or not session_file:
+        return
+        
+    # Create timestamp filename based on session file
+    timestamp_file = session_file.replace('.npy', '_timestamps.json')
+    
+    try:
+        with open(timestamp_file, 'w') as f:
+            json.dump({
+                'session_info': {
+                    'total_gestures': len(timestamps),
+                    'session_file': os.path.basename(session_file),
+                    'created_at': datetime.now().isoformat()
+                },
+                'gestures': timestamps
+            }, f, indent=2)
+        print(f"\n*** Gesture timestamps saved to: {timestamp_file} ***")
+        print(f"*** Total gestures marked: {len(timestamps)} ***")
+    except Exception as e:
+        print(f"Error saving timestamps: {e}")
 
 # Thread for saving the predictions made by the model
 def StorePredictionLoop(pred_save_queue):
@@ -288,8 +376,20 @@ if __name__ == "__main__":
             args=(stream_socket, stream_queue, stop_program)
         )
     
+    # Start keyboard listener thread for gesture marking
+    p_keyboard = None
+    if args.enable_gestures and keyboard:
+        p_keyboard = Thread(
+            target=keyboard_listener,
+            args=(stop_program, args.enable_gestures)
+        )
+        p_keyboard.daemon = True
+    
     print(f'\nStarting the acquisition system: {num_channels_emg} channels with {fsample} sampling rate')
 
+    # Record start time for relative timestamps
+    start_time = time.time()
+    
     p_acquisition.start()
     p_datasave.start()
 
@@ -300,6 +400,9 @@ if __name__ == "__main__":
 
     if p_stream:
         p_stream.start()
+        
+    if p_keyboard:
+        p_keyboard.start()
 
     time.sleep(2.5) # wait for the processes to start
 
@@ -314,6 +417,10 @@ if __name__ == "__main__":
         p_datasave.join()  
 
     time.sleep(2) # sleep for allowing the threads to complete the saving
+    
+    # Save gesture timestamps if any were recorded
+    if gesture_timestamps and save_enabled:
+        save_timestamps(session_file, gesture_timestamps.copy())
 
     if decoding_active:
         print("Events socket closed")
