@@ -6,10 +6,10 @@ import re
 import argparse
 import json
 import threading
+import datetime
 import numpy as np
 from multiprocessing import Process, Queue, Value
 from threading import Thread
-from datetime import datetime
 try:
     import keyboard
 except ImportError:
@@ -67,6 +67,15 @@ def keyboard_listener(stop_program, enable_gestures):
     
     if not keyboard or not enable_gestures:
         return
+
+    import platform
+    if platform.system() == 'Linux':
+        if os.geteuid() != 0:
+            script_name = os.path.basename(__file__)
+            print("\nWARNING: Gesture marking requires root privileges on Linux")
+            print(f"Run with: sudo python {script_name} --enable-gestures")
+            print("Gesture marking is disabled for this session.\n")
+            return
         
     print("\n=== GESTURE MARKING ENABLED ===")
     print("Press SPACE when a gesture occurs to mark the timestamp")
@@ -86,7 +95,7 @@ def keyboard_listener(stop_program, enable_gestures):
                         timestamp_data = {
                             'gesture_id': gesture_counter,
                             'timestamp': relative_timestamp,
-                            'absolute_time': datetime.now().isoformat(),
+                            'absolute_time': datetime.datetime.now().isoformat(),
                             'description': f'Gesture {gesture_counter}'
                         }
                         gesture_timestamps.append(timestamp_data)
@@ -118,7 +127,7 @@ def save_timestamps(session_file, timestamps):
                 'session_info': {
                     'total_gestures': len(timestamps),
                     'session_file': os.path.basename(session_file),
-                    'created_at': datetime.now().isoformat()
+                    'created_at': datetime.datetime.now().isoformat()
                 },
                 'gestures': timestamps
             }, f, indent=2)
@@ -177,7 +186,7 @@ if __name__ == "__main__":
     args = parse_args()
     # TODO: move this to the parameters input of the script - since it's based on the type of decoding being performed
     subj_type = 'healthy' # 'healthy' or 'SCI' - TODO: make this a parameter of the script
-    subj = 6 # TODO: make this a parameter of the script
+    subj = 10 # TODO: make this a parameter of the script
     task = 'open_close' # options: ['open_close','grasp_patterns','single_fingers'] - TODO: make this a parameter of the script
     decoding_active = True # TODO: make this a parameter of the script
     if args.plot_only:
