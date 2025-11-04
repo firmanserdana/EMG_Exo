@@ -198,3 +198,4 @@ debug/**/*.csv
 !**/.gitkeep
 
 *.csv
+*.json
