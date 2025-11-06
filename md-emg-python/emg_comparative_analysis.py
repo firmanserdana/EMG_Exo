@@ -25,7 +25,9 @@ warnings.filterwarnings('ignore')
 
 # Configuration
 FS_HZ = 1000  # Sampling rate in Hz
-CHANNEL_IDS = list(range(32))  # Channel indices 0-31
+NUM_CHANNELS = 32  # Number of EMG channels
+NUM_GESTURES = 6  # Number of gestures/objects to analyze
+CHANNEL_IDS = list(range(NUM_CHANNELS))  # Channel indices
 CONDITIONS = ['Passive glove', 'Active glove', 'No glove']
 CONDITION_COLORS = {
     'Passive glove': '#1f77b4',
@@ -44,10 +46,10 @@ class EMGDataLoader:
         """Load EMG data from .npy file and extract channels 0-31"""
         data = np.load(session_file)
         
-        # If data has more than 32 columns, assume last column is timestamp
-        if data.shape[1] > 32:
-            # Take only first 32 channels (0-31)
-            data = data[:, :32]
+        # If data has more than NUM_CHANNELS columns, assume last column is timestamp
+        if data.shape[1] > NUM_CHANNELS:
+            # Take only first NUM_CHANNELS channels
+            data = data[:, :NUM_CHANNELS]
         
         return data
     
@@ -149,7 +151,7 @@ class EMGAnalyzer:
                 time = np.arange(segment.shape[0]) / FS_HZ
                 
                 # Plot a subset of channels for clarity (every 4th channel)
-                for ch in range(0, 32, 4):
+                for ch in range(0, NUM_CHANNELS, 4):
                     offset = ch * 50  # Vertical offset for visualization
                     ax.plot(time, segment[:, ch] + offset, 
                            linewidth=0.5, alpha=0.7, label=f'Ch{ch}' if idx == 0 else '')
@@ -214,8 +216,8 @@ class EMGAnalyzer:
             ax.set_title(condition, fontsize=14, fontweight='bold')
             ax.set_xlabel('Time (samples, 10ms resolution)', fontsize=10)
             ax.set_ylabel('Channel', fontsize=10)
-            ax.set_yticks(np.arange(0, 32, 4))
-            ax.set_yticklabels(np.arange(0, 32, 4))
+            ax.set_yticks(np.arange(0, NUM_CHANNELS, 4))
+            ax.set_yticklabels(np.arange(0, NUM_CHANNELS, 4))
             
             # Add colorbar
             cbar = plt.colorbar(im, ax=ax)
@@ -326,7 +328,7 @@ class EMGAnalyzer:
         Returns DataFrame with timing statistics
         """
         if object_ids is None:
-            object_ids = list(range(6))
+            object_ids = list(range(NUM_GESTURES))
         
         results = []
         
@@ -426,8 +428,8 @@ def generate_example_data() -> Dict[str, Dict[int, List[np.ndarray]]]:
     for condition, params in condition_params.items():
         data_dict[condition] = {}
         
-        # Generate data for 6 objects
-        for obj_id in range(6):
+        # Generate data for NUM_GESTURES objects
+        for obj_id in range(NUM_GESTURES):
             segments = []
             
             # Generate 2-3 segments per object
@@ -437,9 +439,9 @@ def generate_example_data() -> Dict[str, Dict[int, List[np.ndarray]]]:
                 n_samples = int(duration * FS_HZ)
                 
                 # Create synthetic EMG with different patterns per channel
-                emg = np.zeros((n_samples, 32))
+                emg = np.zeros((n_samples, NUM_CHANNELS))
                 
-                for ch in range(32):
+                for ch in range(NUM_CHANNELS):
                     # Base signal with some temporal structure
                     t = np.linspace(0, duration, n_samples)
                     freq = 20 + ch * 2  # Different frequency per channel
@@ -514,7 +516,7 @@ def load_real_data(data_dir: Path) -> Optional[Dict[str, Dict[int, List[np.ndarr
             
             # If timestamps available, segment by gesture
             if timestamps:
-                for gesture_id in range(6):  # Assume 6 gestures/objects
+                for gesture_id in range(NUM_GESTURES):  # Analyze NUM_GESTURES gestures/objects
                     segments = loader.segment_by_gesture(emg_data, timestamps, gesture_id)
                     if segments:
                         if gesture_id not in data_dict[condition_name]:
@@ -551,9 +553,9 @@ def main():
     print("Generating Figures")
     print("=" * 70)
     
-    # Generate Figure B for all 6 objects
+    # Generate Figure B for all NUM_GESTURES objects
     print("\n--- Figure B: Raw Data Comparison ---")
-    for obj_id in range(6):
+    for obj_id in range(NUM_GESTURES):
         print(f"\nGenerating Figure B for Object {obj_id}...")
         try:
             analyzer.figure_b_raw_comparison(data_dict, object_id=obj_id, 
@@ -562,9 +564,9 @@ def main():
         except Exception as e:
             print(f"  Error generating Figure B for object {obj_id}: {e}")
     
-    # Generate Figure C heatmaps for all 6 objects
+    # Generate Figure C heatmaps for all NUM_GESTURES objects
     print("\n--- Figure C: Heatmaps ---")
-    for obj_id in range(6):
+    for obj_id in range(NUM_GESTURES):
         print(f"\nGenerating heatmap for Object {obj_id}...")
         try:
             analyzer.figure_c_heatmap(data_dict, object_id=obj_id, 
@@ -585,10 +587,10 @@ def main():
     except Exception as e:
         print(f"  Error generating PCA for single object: {e}")
     
-    # Option 2: PCA for all 6 objects
-    print("\nGenerating PCA for all 6 objects...")
+    # Option 2: PCA for all NUM_GESTURES objects
+    print(f"\nGenerating PCA for all {NUM_GESTURES} objects...")
     try:
-        analyzer.figure_c_pca(data_dict, object_ids=list(range(6)), 
+        analyzer.figure_c_pca(data_dict, object_ids=list(range(NUM_GESTURES)), 
                             save_prefix='figureC_pca_all')
         plt.close('all')
     except Exception as e:
@@ -597,7 +599,7 @@ def main():
     # Time consumption analysis
     print("\n--- Time Consumption Analysis ---")
     try:
-        analyzer.analyze_time_consumption(data_dict, object_ids=list(range(6)))
+        analyzer.analyze_time_consumption(data_dict, object_ids=list(range(NUM_GESTURES)))
     except Exception as e:
         print(f"  Error in time consumption analysis: {e}")
     
