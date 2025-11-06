@@ -193,6 +193,8 @@ results-optimization/**/*.csv
 results-optimization/**/*.png
 models-subjects/**/*.pth
 debug/**/*.csv
+results-analysis/**/*.png
+results-analysis/**/*.csv
 
 # Ignore all .gitkeep files in any directory
 !**/.gitkeep
