@@ -199,5 +199,7 @@ results-analysis/**/*.csv
 # Ignore all .gitkeep files in any directory
 !**/.gitkeep
 
+# Ignore data files but allow templates
 *.csv
-*.json
+data/**/*.json
+!timestamps_template.json
