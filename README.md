@@ -43,6 +43,12 @@ This application consists of five main components:
   - Interactive controls for gesture simulation
   - Comprehensive data recording and export (CSV, NPZ, MATLAB)
   - Spectrogram visualization for frequency analysis
+- **Comparative Analysis Tools**:
+  - Publication-ready figure generation for multi-condition comparisons
+  - Raw EMG signal comparison across conditions
+  - Heatmap visualization of channel activity patterns
+  - PCA analysis for condition separability assessment
+  - Time consumption analysis across experimental conditions
 - **ESP32 Pneumatic Glove Integration**:
   - Real-time gesture control via TCP/IP communication with persistent connections
   - Task-specific gesture mapping (open_close, grasp_patterns, single_fingers)
@@ -68,10 +74,13 @@ EMG_Exo/
 ├── md-emg-python/           # Advanced EMG processing framework
 │   ├── emg_control_64.py    # 64-channel EMG control system
 │   ├── emg_plot_64.py       # Advanced visualization
+│   ├── emg_comparative_analysis.py  # Multi-condition analysis tool
 │   ├── model_train.py       # ML model training pipeline
 │   ├── model_evaluate.py    # Model evaluation utilities
 │   ├── streaming_gui.py     # Real-time streaming interface
 │   ├── test_esp32.py        # ESP32 connection test tool
+│   ├── ANALYSIS_README.md   # Analysis tool documentation
+│   ├── QUICK_START.md       # Quick start guide for analysis
 │   ├── config/              # Configuration files
 │   │   ├── 64_config.yaml   # 64-channel system configuration
 │   │   ├── esp32_control.yaml # ESP32 glove configuration
@@ -218,6 +227,35 @@ python md-emg-python/test_esp32.py
 
 # Run complete integration demo
 python md-emg-python/integration_demo.py
+
+# Generate publication-ready comparative analysis figures
+python md-emg-python/emg_comparative_analysis.py
+```
+
+### EMG Comparative Analysis
+
+The system includes powerful tools for generating publication-ready figures comparing EMG data across multiple experimental conditions:
+
+```bash
+cd md-emg-python
+
+# Quick start with example data (for testing)
+python emg_comparative_analysis.py
+
+# With your own data (see ANALYSIS_README.md for data format)
+# Data should be in data/healthy/ organized by condition
+python emg_comparative_analysis.py
+```
+
+**Generated Figures:**
+- **Figure B**: Raw EMG signal comparison (6 objects × 3 conditions)
+- **Figure C**: Channel activity heatmaps (6 objects × 3 conditions)
+- **Figure C**: PCA analysis for condition separability
+- **Time Analysis**: Task duration comparison with statistics
+
+**Output Location:** `results-analysis/`
+
+See `ANALYSIS_README.md` for detailed documentation or `QUICK_START.md` for a 5-minute tutorial.
 ```
 
 ### Complete System Integration
