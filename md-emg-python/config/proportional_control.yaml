@@ -1,0 +1,80 @@
+# Proportional Control Configuration
+# Configuration for continuous proportional EMG control
+
+# Decoder settings
+decoder_type: 'mlp'  # 'mlp' or 'knn'
+use_motor_unit_decomposition: false  # Use motor unit decomposition (true) or raw EMG (false)
+
+# Model file paths (will be set based on decoder type)
+proportional_model_file_mlp: 'models-subjects/healthy/proportional_mlp_individual_fingers.pth'
+proportional_model_file_knn: 'models-subjects/healthy/proportional_knn_individual_fingers.pkl'
+
+# Control mode
+proportional_control_mode: 'individual_fingers'  # 'individual_fingers' or 'whole_hand'
+num_fingers: 5  # Number of fingers to control (1-5)
+
+# Feature extraction
+feature_type: 'rms+mav+wl'  # Feature types for raw EMG
+dec_win_length: 0.2  # Decoding window length in seconds
+dec_win_shift: 0.05  # Decoding window shift in seconds
+
+# Output processing
+smooth_window_size: 5  # Number of samples for smoothing buffer
+smooth_sigma: 1.5  # Gaussian smoothing sigma
+min_activation_threshold: 0.1  # Minimum activation threshold (0-1)
+
+# Control loop settings
+min_update_interval: 0.05  # Minimum time between updates (seconds) - 20 Hz max
+control_mode: 'synchronized'  # 'synchronized', 'unity_only', or 'esp32_only'
+
+# Buffer settings
+buffer_predictions_size: 100  # Number of predictions to buffer before saving
+
+# Motor unit decomposition settings (when use_motor_unit_decomposition=true)
+mud_settings:
+  threshold_method: 'mad'  # 'mad' or 'std'
+  spike_detection_threshold: 4.0  # Threshold multiplier
+  template_window_ms: 5.0  # Template window duration (ms)
+  highpass_cutoff: 100  # Hz
+  lowpass_cutoff: 500  # Hz
+  notch_freq: 50  # Hz (power line frequency)
+
+# Finger-specific control parameters
+finger_control:
+  # Per-finger gain adjustments (multiply output by these values)
+  gains:
+    thumb: 1.0
+    index: 1.0
+    middle: 1.0
+    ring: 1.0
+    pinky: 1.0
+  
+  # Per-finger bias adjustments (add to output)
+  biases:
+    thumb: 0.0
+    index: 0.0
+    middle: 0.0
+    ring: 0.0
+    pinky: 0.0
+
+# Unity integration
+unity_proportional:
+  enabled: true
+  update_rate_hz: 20  # Maximum update rate
+  speed_multiplier: 1.0  # Multiply speed values
+  force_multiplier: 1.0  # Multiply force values
+
+# ESP32 integration
+esp32_proportional:
+  enabled: true
+  update_rate_hz: 20  # Maximum update rate
+  pressure_range: [0, 100]  # Pressure range
+  speed_range: [0, 4]  # Speed range (discrete levels)
+  min_pressure_change: 5  # Minimum pressure change to trigger update (%)
+
+# Data recording
+recording:
+  save_predictions: true
+  save_raw_emg: false
+  save_features: false
+  output_dir: 'results-online/proportional'

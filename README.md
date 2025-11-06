@@ -26,11 +26,18 @@ This application consists of five main components:
   - Signal envelope calculation
   - Muscle activity detection
   - Real-time spectral analysis
+  - **Motor unit decomposition** for detailed muscle activity analysis
 - **Machine Learning-Based Gesture Recognition**:
   - Multiple classifier support (kNN, MLP, LSTM, CRNN, TFM)
   - Automated model training and evaluation
   - Real-time classification with confidence metrics
   - Model optimization pipeline
+- **Proportional Control** (NEW):
+  - Continuous speed and force control for individual fingers
+  - MLP and KNN decoders for regression-based control
+  - Motor unit decomposition option for enhanced control
+  - Per-finger or whole-hand control modes
+  - Real-time proportional output to Unity and ESP32
 - **Gesture Support**:
   - Thumb, index, and middle finger control (flexion, extension, pinching)
   - Ring and little finger control (flexion, extension)
@@ -144,6 +151,7 @@ See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions and [FEAT
 ### Documentation
 
 - [API Documentation](API_DOCUMENTATION.md): Complete API reference
+- [Proportional Control Guide](PROPORTIONAL_CONTROL.md): Comprehensive guide for finger proportional control
 
 ## Prerequisites
 
