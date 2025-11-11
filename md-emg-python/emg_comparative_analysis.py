@@ -1291,6 +1291,27 @@ class EMGAnalyzer:
             rms[i] = np.sqrt(np.mean(window**2, axis=0))
         
         return rms
+
+    def _extract_rms_features(self, segment: np.ndarray, window_size: int, step_size: int) -> np.ndarray:
+        """Extract RMS features for PCA using sliding windows."""
+
+        n_samples = segment.shape[0]
+        if n_samples <= 0:
+            return np.empty((0, segment.shape[1]))
+
+        if n_samples < window_size:
+            rms = np.sqrt(np.mean(segment**2, axis=0, keepdims=True))
+            return rms
+
+        windows = []
+        for start in range(0, n_samples - window_size + 1, step_size):
+            window = segment[start:start + window_size]
+            windows.append(np.sqrt(np.mean(window**2, axis=0)))
+
+        if not windows:
+            return np.sqrt(np.mean(segment**2, axis=0, keepdims=True))
+
+        return np.asarray(windows)
     
     def compute_peak_amplitude(self, data: np.ndarray, window_ms: int = 100) -> float:
         """
@@ -2209,7 +2230,7 @@ class EMGAnalyzer:
         # Collect all subjects
         all_subjects = set()
         for condition in CONDITIONS:
-            if condition not in data_dict:
+            if condition not in data_dict or object_id not in data_dict[condition]:
                 continue
             for obj_id in object_ids:
                 if obj_id not in data_dict[condition]:
