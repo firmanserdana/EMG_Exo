@@ -1,0 +1,233 @@
+Subject 0
+0 = mvc*
+1-3 = with no glove
+4 = hand close and rest
+5-7 = with passive glove*
+7=disconnected devices
+8-10= with active glove*
+11-13 = with no gloves*
+13 = disconnected devices
+14 = no glove bad data
+15 = passive glove*
+16 = no glove*
+
+subject 1
+0 = bad
+1 = mvc*
+2-4 = no gloves*
+2 = bad
+5-7 = passive gloves*
+8-10 = active gloves*
+11 = no gloves
+
+subject 2
+0 = mvc
+1-3 = passive glove
+4-6 = no gloves
+7-9 = active gloves
+
+subject 3
+0 = mvc
+1 = bad
+2-4 = active gloves
+5-7 = no gloves
+8-10 = passives gloves
+
+subject 4
+0 = mvc
+1-3 = no gloves
+4 = bad, fall
+5 = redo
+6-8 = active gloves
+9 = no extend
+10-12 = passive glove
+
+subject 5
+0 = mvc
+1-3 = active
+4-6 = passive
+7-9 = no
+
+subject 6
+1-3 = glove passive
+4-6 = active glove
+7-9 = no gloves
+10 = mvc
+
+subject 7
+0 = mvc
+1-3 = bad due disconnected
+4 = 13 marker, ditch 1, no gloves
+5-6 = no gloves
+
+7 look below passive
+8 = bad
+9-10 = passive gloves
+11-13 = active gloves
+
+[root@fire md-emg-python]# python emg_plot_64_copy.py --plot-only --save-emg --enable-gesture
+Waiting for connection...
+Connection from address: ('172.20.10.3', 58604)
+Waiting for socket server at localhost:55001 (press Ctrl+C to stop)
+Connected to socket server
+EMG session will be saved to: data/healthy/S7/emg_logs/session_07.npy
+
+Starting the acquisition system: 32 channels with 1000 sampling rate
+Starting the saving loop
+Starting the streaming loop...
+Starting the acquisition loop
+
+=== GESTURE MARKING ENABLED ===
+Press SPACE when a gesture occurs to mark the timestamp
+Timestamps will be saved alongside EMG data
+================================
+
+Press Enter to stop the acquisition...Sample frequency: 368 Hz
+ 
+*** GESTURE 1 MARKED at 7.520s ***
+Sample frequency: 533 Hz
+ Sample frequency: 819 Hz
+
+*** GESTURE 2 MARKED at 11.687s ***
+Sample frequency: 1586 Hz
+ 
+*** GESTURE 3 MARKED at 15.253s ***
+ 
+*** GESTURE 4 MARKED at 18.716s ***
+Sample frequency: 363 Hz
+ 
+*** GESTURE 5 MARKED at 22.232s ***
+Sample frequency: 641 Hz
+Sample frequency: 1189 Hz
+ 
+*** GESTURE 6 MARKED at 26.449s ***
+Sample frequency: 575 Hz
+ 
+*** GESTURE 7 MARKED at 30.716s ***
+ 
+*** GESTURE 8 MARKED at 34.681s ***
+ 
+*** GESTURE 9 MARKED at 38.647s ***
+ 
+*** GESTURE 10 MARKED at 43.669s ***
+ 
+*** GESTURE 11 MARKED at 47.735s ***
+Process Process-1:
+Traceback (most recent call last):
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/realtime_components/acquisition.py", line 76, in AcquisitionLoop
+    sample_from_channels = bytes_to_integers(sample_bytes, num_channels_64, bytes_in_sample, output_milli_volts=False)
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/utils/communication_64.py", line 162, in bytes_to_integers
+    value = convert_bytes_to_int(channel, bytes_in_sample)
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/utils/communication_64.py", line 33, in convert_bytes_to_int
+    bytes_value[0] * 65536 + \
+IndexError: index out of range
+ 
+*** GESTURE 12 MARKED at 51.652s ***
+
+Streaming loop stopped.
+
+^CTraceback (most recent call last):
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/emg_plot_64_copy.py", line 426, in <module>
+    p_datasave.join()  
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt
+
+
+subject 8
+0 = mvc
+1-3 = passive
+4, 6-7 = no gloves
+8-10 = active gloves
+
+subject 9
+01 = mvc
+2-4 = passive gloves
+5-7 = no gloves
+8 = look below
+10,13 = active gloves
+
+
+
+EMG session will be saved to: data/healthy/S9/emg_logs/session_08.npy
+
+Starting the acquisition system: 32 channels with 1000 sampling rate
+Starting the saving loop
+Starting the streaming loop...
+Starting the acquisition loop
+
+=== GESTURE MARKING ENABLED ===
+Press SPACE when a gesture occurs to mark the timestamp
+Timestamps will be saved alongside EMG data
+================================
+
+Press Enter to stop the acquisition...Sample frequency: 246 Hz
+ 
+*** GESTURE 1 MARKED at 14.398s ***
+Sample frequency: 753 Hz
+Sample frequency: 1154 Hz
+ 
+*** GESTURE 2 MARKED at 20.726s ***
+ 
+*** GESTURE 3 MARKED at 27.053s ***
+Sample frequency: 798 Hz
+Sample frequency: 1306 Hz
+ 
+*** GESTURE 4 MARKED at 35.189s ***
+Sample frequency: 1130 Hz
+ 
+*** GESTURE 5 MARKED at 41.269s ***
+Sample frequency: 613 Hz
+ 
+*** GESTURE 6 MARKED at 51.110s ***
+ 
+*** GESTURE 7 MARKED at 58.237s ***
+Sample frequency: 620 Hz
+ 
+*** GESTURE 8 MARKED at 64.615s ***
+ 
+*** GESTURE 9 MARKED at 70.138s ***
+ 
+*** GESTURE 10 MARKED at 75.865s ***
+ 
+*** GESTURE 11 MARKED at 81.690s ***
+ 
+*** GESTURE 12 MARKED at 89.474s ***
+Process Process-1:
+Traceback (most recent call last):
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/multiprocessing/process.py", line 314, in _bootstrap
+    self.run()
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/multiprocessing/process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/realtime_components/acquisition.py", line 76, in AcquisitionLoop
+    sample_from_channels = bytes_to_integers(sample_bytes, num_channels_64, bytes_in_sample, output_milli_volts=False)
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/utils/communication_64.py", line 162, in bytes_to_integers
+    value = convert_bytes_to_int(channel, bytes_in_sample)
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/utils/communication_64.py", line 33, in convert_bytes_to_int
+    bytes_value[0] * 65536 + \
+IndexError: index out of range
+
+Streaming loop stopped.
+
+^CTraceback (most recent call last):
+  File "/home/fire/Documents/gitwork/EMG_Exo/md-emg-python/emg_plot_64_copy.py", line 426, in <module>
+    p_datasave.join()  
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/threading.py", line 1096, in join
+    self._wait_for_tstate_lock()
+  File "/home/fire/.conda/envs/md-emg/lib/python3.10/threading.py", line 1116, in _wait_for_tstate_lock
+    if lock.acquire(block, timeout):
+KeyboardInterrupt
+
+
+subject 10
+0=mvc
+1-3=no gloves
+4 = misclick for first timestamp
+5,7 = active gloves
+8-10 = passive gloves

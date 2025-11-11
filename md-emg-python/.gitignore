@@ -203,3 +203,9 @@ results-analysis/**/*.csv
 *.csv
 data/**/*.json
 !timestamps_template.json
+
+*.png
+
+*.svg
+
+*.md
