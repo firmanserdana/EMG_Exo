@@ -52,19 +52,36 @@ MATLAB_CONDITION_BASE_COLORS = {
 def get_channel_spatial_layout():
     """
     Returns channel positions based on physical electrode placement on sleeve.
-    Based on the sleeve image: 2 rows of electrodes, multiple columns per finger/area
+    
+    Layout from user specification:
+    First band (3 rows x 6 columns):
+    Row 0: [1, 2, 3, 4, 5, 6]
+    Row 1: [7, 8, 9, 10, 11, 12]
+    Row 2: [13, 14, 15, 16, 17, 18]
+    
+    Second band (2 rows x 7 columns):
+    Row 3: [19, 20, 21, 22, 23, 24, 25]
+    Row 4: [26, 27, 28, 29, 30, 31, 32]
+    
+    Note: Channel numbers in layout are 1-indexed (1-32), 
+    but EMG data uses 0-indexed (0-31)
     """
-    # Layout: Row 0 (top) and Row 1 (bottom), columns 0-15 for each row
-    # This creates a 2x16 grid matching the physical sleeve
-    layout = np.zeros((2, 16), dtype=int)
+    # Create 5x7 layout (padded with -1 for empty spaces)
+    layout = np.full((5, 7), -1, dtype=int)
     
-    # Top row: channels 0-15
-    for col in range(16):
-        layout[0, col] = col
+    # First band - 3 rows x 6 columns (channels 0-17, which are 1-18 in 1-indexed)
+    # Row 0: channels 0-5 (displayed as 1-6)
+    layout[0, :6] = [0, 1, 2, 3, 4, 5]
+    # Row 1: channels 6-11 (displayed as 7-12)
+    layout[1, :6] = [6, 7, 8, 9, 10, 11]
+    # Row 2: channels 12-17 (displayed as 13-18)
+    layout[2, :6] = [12, 13, 14, 15, 16, 17]
     
-    # Bottom row: channels 16-31
-    for col in range(16):
-        layout[1, col] = col + 16
+    # Second band - 2 rows x 7 columns (channels 18-31, which are 19-32 in 1-indexed)
+    # Row 3: channels 18-24 (displayed as 19-25)
+    layout[3, :] = [18, 19, 20, 21, 22, 23, 24]
+    # Row 4: channels 25-31 (displayed as 26-32)
+    layout[4, :] = [25, 26, 27, 28, 29, 30, 31]
     
     return layout
 
@@ -341,7 +358,7 @@ class EMGAnalyzer:
         self.bandpass_order = 4
         self.bandpass_effective_bounds = None
         
-        # DISABLED: No bandpass filtering - raw data analysis
+        # DISABLED: No bandpass filtering - using raw unfiltered data
         print("INFO: Bandpass filtering DISABLED - using raw unfiltered data")
         self._bandpass_sos = None
 
@@ -350,12 +367,23 @@ class EMGAnalyzer:
         self._rng = np.random.default_rng(1337)
 
     def _normalize_segment(self, segment: np.ndarray, subject_id: Optional[str]) -> np.ndarray:
-        """Return raw segment without filtering or MVC normalization."""
+        """Apply MVC normalization but NO filtering. Returns data in %MVC units."""
 
         data = segment.astype(np.float64, copy=True)
+        
+        # Clip extreme values before normalization (likely artifacts/saturation)
+        # Values > 50000 are typically electrode saturation or disconnection
+        data = np.clip(data, -50000, 50000)
+        
         # No bandpass filtering - raw data
         # No outlier attenuation - data preserved as-is
-        # No MVC normalization - raw amplitude values
+        
+        # Apply MVC normalization if available
+        if subject_id and subject_id in self.mvc_dict:
+            mvc_rms = self.mvc_dict[subject_id]
+            # Normalize to %MVC (percentage of maximum voluntary contraction)
+            # Each channel divided by its MVC value, then multiply by 100
+            data = (data / mvc_rms[np.newaxis, :]) * 100.0
         
         return data
 
@@ -1621,6 +1649,153 @@ class EMGAnalyzer:
         
         return fig
     
+    def generate_spatial_heatmaps_per_subject(
+        self,
+        data_dict: Dict[str, Dict[int, List[SegmentRecord]]],
+        object_ids: List[int] = None
+    ) -> None:
+        """
+        Generate spatial heatmaps for each subject and object across all conditions.
+        
+        Creates individual heatmap files showing EMG activity patterns in the physical
+        electrode layout for each subject-object combination.
+        
+        Output: One figure per subject-object combination showing 3 conditions side-by-side
+        Saved to: results-analysis/emg_heatmap/
+        """
+        # Create output directory
+        heatmap_dir = self.results_dir / 'emg_heatmap'
+        heatmap_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get channel layout
+        channel_layout = get_channel_spatial_layout()
+        
+        if object_ids is None:
+            # Get all available object IDs
+            object_ids = sorted({obj_id for condition_data in data_dict.values() 
+                                for obj_id in condition_data.keys()})
+        
+        if not object_ids:
+            print("No objects found for spatial heatmap generation")
+            return
+        
+        # Collect all subjects
+        all_subjects = set()
+        for condition in CONDITIONS:
+            if condition not in data_dict:
+                continue
+            for obj_id in object_ids:
+                if obj_id not in data_dict[condition]:
+                    continue
+                for record in data_dict[condition][obj_id]:
+                    all_subjects.add(record.subject)
+        
+        subjects = sorted(all_subjects)
+        print(f"\nGenerating spatial heatmaps for {len(subjects)} subjects x {len(object_ids)} objects...")
+        
+        # Generate one figure per subject-object combination
+        for subject in subjects:
+            for obj_id in object_ids:
+                # Collect data for this subject-object across conditions
+                subject_data = {}
+                
+                for condition in CONDITIONS:
+                    if condition not in data_dict or obj_id not in data_dict[condition]:
+                        continue
+                    
+                    # Find records for this subject
+                    subject_records = [rec for rec in data_dict[condition][obj_id] 
+                                      if rec.subject == subject]
+                    
+                    if not subject_records:
+                        continue
+                    
+                    # Compute mean RMS across all sessions for this subject
+                    all_ch_rms = []
+                    for record in subject_records:
+                        segment = self._normalize_segment(record.samples, record.subject)
+                        # Compute RMS per channel
+                        ch_mean_rms = np.sqrt(np.mean(segment**2, axis=0))
+                        all_ch_rms.append(ch_mean_rms)
+                    
+                    if all_ch_rms:
+                        # Average across sessions
+                        subject_data[condition] = np.mean(all_ch_rms, axis=0)
+                
+                if not subject_data:
+                    # No data for this subject-object combination
+                    continue
+                
+                # Create figure with 3 subplots (one per condition)
+                present_conditions = [c for c in CONDITIONS if c in subject_data]
+                n_conditions = len(present_conditions)
+                
+                if n_conditions == 0:
+                    continue
+                
+                fig, axes = plt.subplots(1, n_conditions, figsize=(6 * n_conditions, 6))
+                if n_conditions == 1:
+                    axes = [axes]
+                
+                # Global color scale across all conditions for this subject-object
+                all_values = np.concatenate([v for v in subject_data.values()])
+                vmin, vmax = all_values.min(), all_values.max()
+                
+                for idx, condition in enumerate(present_conditions):
+                    ax = axes[idx]
+                    
+                    # Map channels to spatial layout
+                    spatial_map = np.full_like(channel_layout, np.nan, dtype=float)
+                    for row in range(channel_layout.shape[0]):
+                        for col in range(channel_layout.shape[1]):
+                            ch = channel_layout[row, col]
+                            if ch >= 0:  # Valid channel (not padding)
+                                spatial_map[row, col] = subject_data[condition][ch]
+                    
+                    # Create masked array to hide -1 (empty) positions
+                    masked_map = np.ma.masked_where(channel_layout == -1, spatial_map)
+                    
+                    # Use bilinear interpolation for smoother appearance like figureC
+                    im = ax.imshow(masked_map, cmap='hot', vmin=vmin, vmax=vmax, 
+                                  interpolation='bilinear', aspect='auto')
+                    
+                    # Add channel labels (1-indexed for display)
+                    for row in range(channel_layout.shape[0]):
+                        for col in range(channel_layout.shape[1]):
+                            ch = channel_layout[row, col]
+                            if ch >= 0:  # Valid channel
+                                value = spatial_map[row, col]
+                                # Use white text on dark background, black on light
+                                text_color = 'white' if value > (vmin + vmax)/2 else 'black'
+                                ax.text(col, row, f'{ch+1}', ha='center', va='center', 
+                                       fontsize=7, color=text_color)
+                    
+                    mean_val = subject_data[condition].mean()
+                    ax.set_title(f'{condition}\nMean: {mean_val:.1f} %MVC', 
+                                fontsize=13, fontweight='bold')
+                    ax.set_xlabel('Electrode Column', fontsize=10)
+                    ax.set_ylabel('Row', fontsize=10)
+                    
+                    # Set tick labels to match the band structure
+                    ax.set_xticks(range(channel_layout.shape[1]))
+                    ax.set_yticks(range(channel_layout.shape[0]))
+                    
+                    # Add colorbar
+                    cbar = plt.colorbar(im, ax=ax, label='%MVC')
+                
+                fig.suptitle(f'Spatial EMG Activity Map: {subject} - Object {obj_id}', 
+                            fontsize=16, fontweight='bold')
+                plt.tight_layout()
+                
+                # Save figure
+                filename = f'spatial_{subject}_object_{obj_id}.svg'
+                save_path = heatmap_dir / filename
+                plt.savefig(save_path, bbox_inches='tight', format='svg')
+                print(f"  Saved: {filename}")
+                plt.close(fig)
+        
+        print(f"\n✓ All spatial heatmaps saved to: {heatmap_dir}")
+    
     def figure_c_pca(
         self,
         data_dict: Dict[str, Dict[int, List[SegmentRecord]]],
@@ -1967,39 +2142,99 @@ def generate_example_data(fs_hz: float = DEFAULT_FS_HZ) -> Dict[str, Dict[int, L
 def load_mvc_references(data_dir: Path, subjects: List[str]) -> Dict[str, np.ndarray]:
     """Load MVC (Maximum Voluntary Contraction) data for each subject.
     
+    Uses the 99th percentile of RMS values across ALL sessions to get robust MVC estimate.
+    This approach is more robust than relying on a single MVC session which may have
+    recording issues or insufficient contractions.
+    
     Returns a dictionary mapping subject_id to MVC RMS values (per channel).
-    MVC is typically session 00 for each subject.
     """
     mvc_dict = {}
     loader = EMGDataLoader(data_dir)
     
     for subject_id in subjects:
-        subject_dir = data_dir / subject_id / 'emg_logs'
-        mvc_file = subject_dir / 'session_00.npy'
+        subject_id_upper = subject_id.upper()
         
-        if not mvc_file.exists():
-            print(f"  Warning: No MVC file found for {subject_id}, skipping MVC normalization for this subject")
+        subject_dir = data_dir / subject_id / 'emg_logs'
+        if not subject_dir.exists():
+            print(f"  Warning: No emg_logs directory for {subject_id}")
+            continue
+        
+        # Load ALL sessions for this subject and find maximum activation
+        all_session_files = sorted(subject_dir.glob('session_*.npy'))
+        
+        if not all_session_files:
+            print(f"  Warning: No session files found for {subject_id}")
             continue
         
         try:
-            # Load MVC data
-            mvc_data = loader.load_session(mvc_file)
-            if mvc_data is None or mvc_data.size == 0:
-                print(f"  Warning: Empty MVC data for {subject_id}")
-                continue
+            # Collect RMS values from all sessions
+            all_rms_values = [[] for _ in range(NUM_CHANNELS)]
             
-            # Compute RMS across entire MVC session for each channel
-            # This gives us the maximum activation for each channel
-            mvc_rms = np.sqrt(np.mean(mvc_data[:, :NUM_CHANNELS]**2, axis=0))
+            for session_file in all_session_files:
+                try:
+                    session_data = loader.load_session(session_file)
+                    if session_data is None or session_data.size == 0:
+                        continue
+                    
+                    emg_channels = session_data[:, :NUM_CHANNELS]
+                    
+                    # Skip sessions with excessive saturation (>1% of values saturated)
+                    # Occasional spikes are OK, but widespread saturation indicates bad recording
+                    saturation_percent = (np.abs(emg_channels) > 100000).sum() / emg_channels.size * 100
+                    if saturation_percent > 1.0:
+                        print(f"    Skipping {session_file.name} for {subject_id}: {saturation_percent:.1f}% saturated values")
+                        continue
+                    
+                    # Compute RMS for this session using 500ms windows
+                    window_samples = int(0.5 * 1000)  # 500ms at ~1000Hz
+                    n_samples = emg_channels.shape[0]
+                    
+                    if n_samples < window_samples:
+                        continue  # Skip very short sessions
+                    
+                    for ch in range(NUM_CHANNELS):
+                        channel_data = emg_channels[:, ch]
+                        
+                        # Slide window and collect RMS values
+                        for start_idx in range(0, n_samples - window_samples + 1, window_samples // 2):
+                            end_idx = start_idx + window_samples
+                            window = channel_data[start_idx:end_idx]
+                            rms_val = np.sqrt(np.mean(window**2))
+                            
+                            # Only include reasonable RMS values (< 50000)
+                            if rms_val < 50000:
+                                all_rms_values[ch].append(rms_val)
+                
+                except Exception as e:
+                    print(f"  Warning: Failed to load {session_file.name} for {subject_id}: {e}")
+                    continue
+            
+            # Use 99th percentile across ALL windows from ALL sessions
+            # But first remove extreme outliers (>99.9th percentile) to avoid artifacts
+            mvc_rms = np.zeros(NUM_CHANNELS)
+            for ch in range(NUM_CHANNELS):
+                if all_rms_values[ch]:
+                    # Remove extreme outliers first (likely artifacts)
+                    channel_rms = np.array(all_rms_values[ch])
+                    outlier_threshold = np.percentile(channel_rms, 99.9)
+                    filtered_rms = channel_rms[channel_rms <= outlier_threshold]
+                    
+                    if len(filtered_rms) > 0:
+                        # Now take 99th percentile of filtered data
+                        mvc_rms[ch] = np.percentile(filtered_rms, 99)
+                    else:
+                        mvc_rms[ch] = np.percentile(channel_rms, 99)
+                else:
+                    mvc_rms[ch] = 1.0  # Fallback
             
             # Ensure no zero values (would cause division by zero)
             mvc_rms = np.where(mvc_rms > 1e-6, mvc_rms, 1.0)
             
-            mvc_dict[subject_id.upper()] = mvc_rms
-            print(f"  Loaded MVC for {subject_id}: mean={mvc_rms.mean():.2f}, std={mvc_rms.std():.2f}")
+            mvc_dict[subject_id_upper] = mvc_rms
+            print(f"  Loaded MVC for {subject_id} from {len(all_session_files)} sessions: mean={mvc_rms.mean():.2f}, std={mvc_rms.std():.2f}")
             
         except Exception as e:
-            print(f"  Warning: Failed to load MVC for {subject_id}: {e}")
+            print(f"  Warning: Failed to compute MVC for {subject_id}: {e}")
             continue
     
     return mvc_dict
@@ -2402,6 +2637,14 @@ def main():
     except Exception as e:
         print(f"  Error generating channel statistics summary: {e}")
 
+    # Spatial heatmaps per subject
+    print("\n--- Spatial Heatmaps per Subject ---")
+    try:
+        analyzer.generate_spatial_heatmaps_per_subject(data_dict, object_ids=object_ids)
+        plt.close('all')
+    except Exception as e:
+        print(f"  Error generating spatial heatmaps: {e}")
+
     # Time consumption analysis
     print("\n--- Time Consumption Analysis ---")
     try:
@@ -2426,10 +2669,11 @@ def main():
     print("  - figureD_channels_bar_object_{primary}.svg (channel RMS summary)".replace('{primary}', str(primary_object)))
     print("  - figureD_channels_diff_object_{primary}.svg (condition difference heatmap)".replace('{primary}', str(primary_object)))
     print("  - channel_rms_stats_object_{primary}.csv (exported RMS statistics)".replace('{primary}', str(primary_object)))
+    print("  - emg_heatmap/ (spatial heatmaps per subject and object)")
     print("\nNote: Statistical tests available in results-analysis/statistical_summary_*.md")
 
-    # No filtering, no MVC normalization, no outlier replacement
-    print(f"\nData processing: RAW DATA ONLY - No bandpass filtering, No MVC normalization, Outliers kept as-is")
+    # MVC normalization enabled, no filtering, outliers kept as-is
+    print(f"\nData processing: MVC NORMALIZED - No bandpass filtering, MVC normalization enabled ({len(analyzer.mvc_dict)} subjects), Outliers kept as-is")
 
 
 

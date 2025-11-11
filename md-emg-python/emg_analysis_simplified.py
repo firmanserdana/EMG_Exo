@@ -282,22 +282,17 @@ def create_pca_per_object(data_dict, analyzer, results_dir):
                         fontsize=13, fontweight='bold')
             ax.grid(True, alpha=0.3, axis='y')
         
-        # Add statistical comparison
+        # Add summary statistics (mean magnitudes only, no hypothesis testing)
         if 'Active glove' in condition_arrays:
             active_mag = np.linalg.norm(condition_arrays['Active glove'], axis=1).mean()
             passive_mag = np.linalg.norm(condition_arrays['Passive glove'], axis=1).mean() if 'Passive glove' in condition_arrays else 0
             no_mag = np.linalg.norm(condition_arrays['No glove'], axis=1).mean() if 'No glove' in condition_arrays else 0
             
-            stats_text = f"Magnitude: Active={active_mag:.2f}, Passive={passive_mag:.2f}, No={no_mag:.2f}"
-            if active_mag < passive_mag and active_mag < no_mag:
-                stats_text += "\n✓ Active < Passive & No"
-                bbox_color = 'lightgreen'
-            else:
-                stats_text += "\n✗ Hypothesis not confirmed"
-                bbox_color = 'lightcoral'
+            stats_text = f"Mean Magnitude: Active={active_mag:.2f}, Passive={passive_mag:.2f}, No={no_mag:.2f}"
+            stats_text += "\n(See statistical_summary_pca.md for significance tests)"
             
             fig.text(0.5, 0.02, stats_text, ha='center', fontsize=11,
-                    bbox=dict(boxstyle='round', facecolor=bbox_color, alpha=0.7))
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
         
         plt.tight_layout()
         plt.subplots_adjust(bottom=0.12)
@@ -402,8 +397,14 @@ def main():
     
     print(f"Inferred sampling rate: {inferred_fs:.2f} Hz")
     
+    if mvc_dict:
+        print(f"MVC normalization enabled for {len(mvc_dict)} subjects")
+        print("  All EMG values will be expressed as %MVC")
+    else:
+        print("Warning: No MVC data loaded - results will be in raw units")
+    
     loader = EMGDataLoader(data_dir)
-    analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs)
+    analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs, mvc_dict=mvc_dict)
     
     # Generate figures
     print("\n--- Figure B: Temporal Comparisons ---")
