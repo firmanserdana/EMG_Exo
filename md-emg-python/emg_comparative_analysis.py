@@ -324,10 +324,12 @@ class EMGAnalyzer:
     def __init__(
         self,
         data_loader: EMGDataLoader,
-        fs_hz: float = DEFAULT_FS_HZ
+        fs_hz: float = DEFAULT_FS_HZ,
+        mvc_dict: Optional[Dict[str, np.ndarray]] = None
     ):
         self.data_loader = data_loader
         self.fs_hz = fs_hz
+        self.mvc_dict = mvc_dict or {}  # Subject MVC normalization values
         self.results_dir = Path('results-analysis')
         self.results_dir.mkdir(exist_ok=True)
 
@@ -339,25 +341,22 @@ class EMGAnalyzer:
         self.bandpass_order = 4
         self.bandpass_effective_bounds = None
         
-        # Only enable bandpass if sampling rate is adequate (Nyquist > 50 Hz)
-        if fs_hz >= 100:
-            self._bandpass_sos = self._design_bandpass_filter(fs_hz)
-        else:
-            print(f"Warning: Sampling rate {fs_hz:.1f} Hz too low for EMG bandpass filtering (need >100 Hz)")
-            print("  Bandpass filtering disabled. Using outlier removal only.")
-            self._bandpass_sos = None
+        # DISABLED: No bandpass filtering - raw data analysis
+        print("INFO: Bandpass filtering DISABLED - using raw unfiltered data")
+        self._bandpass_sos = None
 
-        self.outlier_threshold = 6.0
-        self.outlier_noise_scale = 0.1
+        # Outlier handling disabled - data preserved as-is
         self._outlier_counter = 0
         self._rng = np.random.default_rng(1337)
 
     def _normalize_segment(self, segment: np.ndarray, subject_id: Optional[str]) -> np.ndarray:
-        """Clean segment using bandpass filtering and outlier attenuation."""
+        """Return raw segment without filtering or MVC normalization."""
 
         data = segment.astype(np.float64, copy=True)
-        data = self._apply_bandpass(data)
-        data = self._attenuate_outliers(data)
+        # No bandpass filtering - raw data
+        # No outlier attenuation - data preserved as-is
+        # No MVC normalization - raw amplitude values
+        
         return data
 
     def _design_bandpass_filter(self, fs_hz: float) -> Optional[np.ndarray]:
@@ -411,28 +410,11 @@ class EMGAnalyzer:
             return sp_signal.sosfilt(self._bandpass_sos, data, axis=0)
 
     def _attenuate_outliers(self, data: np.ndarray) -> np.ndarray:
-        """Replace extreme samples with low-level white noise."""
+        """Keep outliers as-is (no replacement) - preserves original data integrity."""
 
-        if data.size == 0:
-            return data
-
-        median = np.median(data, axis=0)
-        deviation = np.abs(data - median)
-        mad = np.median(deviation, axis=0)
-        robust_scale = 1.4826 * np.where(mad > 0.0, mad, np.std(data, axis=0) + 1e-9)
-        robust_scale = np.where(robust_scale == 0.0, 1.0, robust_scale)
-
-        robust_z = deviation / robust_scale
-        mask = robust_z > self.outlier_threshold
-        if not np.any(mask):
-            return data
-
-        cleaned = data.copy()
-        noise_scale = self.outlier_noise_scale * robust_scale
-        noise = self._rng.normal(loc=0.0, scale=noise_scale, size=data.shape)
-        cleaned[mask] = noise[mask]
-        self._outlier_counter += int(mask.sum())
-        return cleaned
+        # Simply return the data unchanged - no outlier replacement
+        # This preserves the original signal including extreme values
+        return data
 
     @property
     def outlier_samples_replaced(self) -> int:
@@ -843,6 +825,220 @@ class EMGAnalyzer:
             rms[i] = np.sqrt(np.mean(window**2, axis=0))
         
         return rms
+    
+    def compute_peak_amplitude(self, data: np.ndarray, window_ms: int = 100) -> float:
+        """
+        Compute peak amplitude (maximum RMS) - duration-independent metric.
+        
+        Reference: Hodges & Bui (1996) - standard method for peak muscle activation
+        
+        Args:
+            data: EMG signal (samples, channels)
+            window_ms: RMS window size in milliseconds
+            
+        Returns:
+            Peak amplitude averaged across channels (%MVC if normalized)
+        """
+        rms = self.compute_rms(data, window_ms=window_ms)
+        peak_per_channel = np.max(rms, axis=0)
+        return float(np.mean(peak_per_channel))
+    
+    def compute_percentile_amplitude(self, data: np.ndarray, percentile: float = 90.0, 
+                                     window_ms: int = 100) -> float:
+        """
+        Compute percentile amplitude - robust high-amplitude metric.
+        
+        90th percentile captures high-effort periods while being robust to outliers.
+        Duration-independent metric suitable for comparing tasks of different lengths.
+        
+        Reference: Hermens et al. (2000) - SENIAM recommendations for EMG analysis
+        
+        Args:
+            data: EMG signal (samples, channels)
+            percentile: Percentile to compute (default 90th)
+            window_ms: RMS window size in milliseconds
+            
+        Returns:
+            Percentile amplitude averaged across channels (%MVC if normalized)
+        """
+        rms = self.compute_rms(data, window_ms=window_ms)
+        percentile_per_channel = np.percentile(rms, percentile, axis=0)
+        return float(np.mean(percentile_per_channel))
+    
+    def compute_active_amplitude(self, data: np.ndarray, threshold_percentile: float = 10.0,
+                                window_ms: int = 100) -> float:
+        """
+        Compute mean amplitude during active periods only (above threshold).
+        
+        Excludes rest/low-activity periods by thresholding. Duration-independent
+        as it only considers time points when muscle is actually active.
+        
+        Args:
+            data: EMG signal (samples, channels)
+            threshold_percentile: Percentile for baseline threshold (default 10th)
+            window_ms: RMS window size in milliseconds
+            
+        Returns:
+            Mean amplitude during active periods, averaged across channels (%MVC)
+        """
+        rms = self.compute_rms(data, window_ms=window_ms)
+        
+        # Calculate threshold per channel
+        threshold_per_channel = np.percentile(rms, threshold_percentile, axis=0)
+        
+        # Find active periods (above threshold for any channel)
+        active_mask = np.any(rms > threshold_per_channel, axis=1)
+        
+        if not np.any(active_mask):
+            return 0.0
+        
+        active_rms = rms[active_mask]
+        return float(np.mean(active_rms))
+    
+    def compute_activation_duration(self, data: np.ndarray, threshold_percentile: float = 10.0,
+                                    window_ms: int = 100) -> float:
+        """
+        Compute proportion of time with muscle activation above baseline.
+        
+        Temporal metric indicating how much of the task duration involves active
+        muscle contraction. Range: [0, 1] where 1 = continuous activation.
+        
+        Reference: Tenan et al. (2017) - muscle onset detection methods
+        
+        Args:
+            data: EMG signal (samples, channels)
+            threshold_percentile: Percentile for baseline threshold
+            window_ms: RMS window size in milliseconds
+            
+        Returns:
+            Proportion of time active (0-1)
+        """
+        rms = self.compute_rms(data, window_ms=window_ms)
+        
+        # Calculate threshold per channel
+        threshold_per_channel = np.percentile(rms, threshold_percentile, axis=0)
+        
+        # Active when above threshold in any channel
+        active_mask = np.any(rms > threshold_per_channel, axis=1)
+        
+        return float(np.sum(active_mask) / len(active_mask))
+    
+    def compute_burst_frequency(self, data: np.ndarray, threshold_percentile: float = 10.0,
+                                window_ms: int = 100, min_burst_duration_ms: float = 50.0) -> float:
+        """
+        Compute muscle burst frequency (activations per second).
+        
+        Counts discrete activation events (bursts) where muscle activity exceeds
+        baseline for at least min_burst_duration_ms. More physiologically meaningful
+        than amplitude/duration ratio.
+        
+        Reference: Tenan et al. (2017) - burst detection in EMG
+        
+        Args:
+            data: EMG signal (samples, channels)
+            threshold_percentile: Percentile for baseline threshold
+            window_ms: RMS window size in milliseconds
+            min_burst_duration_ms: Minimum burst duration to count (ms)
+            
+        Returns:
+            Burst frequency in Hz (bursts per second)
+        """
+        rms = self.compute_rms(data, window_ms=window_ms)
+        
+        # Calculate threshold per channel
+        threshold_per_channel = np.percentile(rms, threshold_percentile, axis=0)
+        
+        # Active when above threshold in any channel
+        active_mask = np.any(rms > threshold_per_channel, axis=1)
+        
+        # Find burst onsets (transitions from inactive to active)
+        active_int = active_mask.astype(int)
+        transitions = np.diff(active_int)
+        burst_onsets = np.where(transitions == 1)[0]
+        burst_offsets = np.where(transitions == -1)[0]
+        
+        # Filter bursts by minimum duration
+        min_burst_samples = max(1, int(min_burst_duration_ms * self.fs_hz / 1000))
+        valid_bursts = 0
+        
+        for onset in burst_onsets:
+            # Find corresponding offset
+            offsets_after = burst_offsets[burst_offsets > onset]
+            if len(offsets_after) > 0:
+                offset = offsets_after[0]
+                duration_samples = offset - onset
+                if duration_samples >= min_burst_samples:
+                    valid_bursts += 1
+            else:
+                # Burst extends to end of signal
+                duration_samples = len(active_mask) - onset
+                if duration_samples >= min_burst_samples:
+                    valid_bursts += 1
+        
+        # Convert to frequency (bursts per second)
+        duration_seconds = len(data) / self.fs_hz
+        return float(valid_bursts / duration_seconds) if duration_seconds > 0 else 0.0
+    
+    def extract_temporal_features(self, data: np.ndarray, window_ms: int = 100) -> np.ndarray:
+        """
+        Extract comprehensive temporal features for PCA - duration-independent.
+        
+        Returns a fixed-size feature vector per segment, ensuring equal contribution
+        to PCA regardless of task duration. Each segment contributes one row.
+        
+        Reference: Phinyomark et al. (2012) - feature extraction for EMG classification
+        
+        Args:
+            data: EMG signal (samples, channels)
+            window_ms: RMS window size in milliseconds
+            
+        Returns:
+            Feature vector of shape (n_features,) containing:
+            - Per-channel statistics (mean, std, peak, percentiles)
+            - Temporal features (activation duration, burst frequency)
+            - Global statistics across channels
+        """
+        rms = self.compute_rms(data, window_ms=window_ms)
+        n_channels = rms.shape[1]
+        
+        features = []
+        
+        # Per-channel amplitude features
+        for ch in range(n_channels):
+            ch_rms = rms[:, ch]
+            features.extend([
+                np.mean(ch_rms),          # Mean amplitude
+                np.std(ch_rms),           # Amplitude variability
+                np.percentile(ch_rms, 90), # High-amplitude (90th percentile)
+                np.max(ch_rms),           # Peak amplitude
+            ])
+        
+        # Global features (across all channels)
+        mean_across_channels = np.mean(rms, axis=1)
+        features.extend([
+            np.mean(mean_across_channels),
+            np.std(mean_across_channels),
+            np.percentile(mean_across_channels, 90),
+            np.max(mean_across_channels),
+        ])
+        
+        # Temporal features (duration-independent)
+        features.append(self.compute_activation_duration(data, window_ms=window_ms))
+        features.append(self.compute_burst_frequency(data, window_ms=window_ms))
+        
+        # Cross-channel coordination (correlation between channels)
+        if n_channels > 1:
+            # Mean absolute correlation between adjacent channels
+            correlations = []
+            for ch in range(n_channels - 1):
+                if np.std(rms[:, ch]) > 0 and np.std(rms[:, ch+1]) > 0:
+                    corr = np.corrcoef(rms[:, ch], rms[:, ch+1])[0, 1]
+                    correlations.append(abs(corr))
+            features.append(np.mean(correlations) if correlations else 0.0)
+        else:
+            features.append(0.0)
+        
+        return np.array(features, dtype=np.float64)
 
     def _extract_rms_features(self, segment: np.ndarray, window_size: int, step_size: int) -> np.ndarray:
         """Extract RMS features for PCA using sliding windows."""
@@ -1431,7 +1627,14 @@ class EMGAnalyzer:
         object_ids: List[int] = None,
         save_prefix: str = 'figC_pca'
     ) -> Optional[plt.Figure]:
-        """Figure C: MATLAB-inspired PCA overview with component subplots per object."""
+        """
+        Figure C: MATLAB-inspired PCA overview with component subplots per object.
+        
+        Uses feature-based approach where each segment contributes equally (one row)
+        regardless of duration, ensuring fair comparison across conditions.
+        
+        Reference: Phinyomark et al. (2012) - EMG feature extraction
+        """
 
         if object_ids is None:
             object_ids = [0]
@@ -1443,12 +1646,9 @@ class EMGAnalyzer:
 
         fig, axes = plt.subplots(3, n_objects, figsize=(5 * n_objects, 9), squeeze=False, sharey='row')
 
-        window_size = max(1, int(round(0.25 * self.fs_hz)))
-        step_size = max(1, int(round(0.125 * self.fs_hz)))
-
         for col, obj_id in enumerate(object_ids):
             all_features = []
-            segment_meta: List[Tuple[str, str, int]] = []
+            segment_meta: List[Tuple[str, str]] = []  # (condition, subject)
 
             for condition in CONDITIONS:
                 if condition not in data_dict or obj_id not in data_dict[condition]:
@@ -1456,11 +1656,12 @@ class EMGAnalyzer:
 
                 for record in data_dict[condition][obj_id]:
                     normalized = self._normalize_segment(record.samples, record.subject)
-                    features = self._extract_rms_features(normalized, window_size, step_size)
+                    # Extract temporal features: each segment → 1 row (duration-independent)
+                    features = self.extract_temporal_features(normalized, window_ms=100)
                     if features.size == 0:
                         continue
                     all_features.append(features)
-                    segment_meta.append((condition, record.subject, features.shape[0]))
+                    segment_meta.append((condition, record.subject))
 
             if not all_features:
                 for row_idx in range(3):
@@ -1469,6 +1670,7 @@ class EMGAnalyzer:
                     ax.axis('off')
                 continue
 
+            # Each segment contributes exactly 1 row (equal contribution)
             X = np.vstack(all_features)
             if X.shape[0] < 3:
                 for row_idx in range(3):
@@ -1486,15 +1688,13 @@ class EMGAnalyzer:
             # Use absolute values to avoid negative components
             scores = np.abs(scores)
 
+            # Map scores back to segments (each segment has exactly 1 score)
             subject_condition_scores: Dict[Tuple[str, str], List[np.ndarray]] = defaultdict(list)
-            offset = 0
-            for condition, subject, length in segment_meta:
-                segment_scores = scores[offset:offset + length]
-                offset += length
-                if segment_scores.size == 0:
-                    continue
-                subject_condition_scores[(condition, subject)].append(segment_scores.mean(axis=0))
+            for idx, (condition, subject) in enumerate(segment_meta):
+                segment_score = scores[idx]
+                subject_condition_scores[(condition, subject)].append(segment_score)
 
+            # Average scores per subject per condition
             condition_subject_vectors: Dict[str, List[np.ndarray]] = defaultdict(list)
             for (condition, subject), vectors in subject_condition_scores.items():
                 if not vectors:
@@ -1764,12 +1964,60 @@ def generate_example_data(fs_hz: float = DEFAULT_FS_HZ) -> Dict[str, Dict[int, L
     return data_dict
 
 
-def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[SegmentRecord]]]], Optional[float]]:
-    """Load EMG data from S1-S5 and S6-S10 (excluding S0).
-    Uses notes.txt for conditions and handles special cases."""
+def load_mvc_references(data_dir: Path, subjects: List[str]) -> Dict[str, np.ndarray]:
+    """Load MVC (Maximum Voluntary Contraction) data for each subject.
+    
+    Returns a dictionary mapping subject_id to MVC RMS values (per channel).
+    MVC is typically session 00 for each subject.
+    """
+    mvc_dict = {}
+    loader = EMGDataLoader(data_dir)
+    
+    for subject_id in subjects:
+        subject_dir = data_dir / subject_id / 'emg_logs'
+        mvc_file = subject_dir / 'session_00.npy'
+        
+        if not mvc_file.exists():
+            print(f"  Warning: No MVC file found for {subject_id}, skipping MVC normalization for this subject")
+            continue
+        
+        try:
+            # Load MVC data
+            mvc_data = loader.load_session(mvc_file)
+            if mvc_data is None or mvc_data.size == 0:
+                print(f"  Warning: Empty MVC data for {subject_id}")
+                continue
+            
+            # Compute RMS across entire MVC session for each channel
+            # This gives us the maximum activation for each channel
+            mvc_rms = np.sqrt(np.mean(mvc_data[:, :NUM_CHANNELS]**2, axis=0))
+            
+            # Ensure no zero values (would cause division by zero)
+            mvc_rms = np.where(mvc_rms > 1e-6, mvc_rms, 1.0)
+            
+            mvc_dict[subject_id.upper()] = mvc_rms
+            print(f"  Loaded MVC for {subject_id}: mean={mvc_rms.mean():.2f}, std={mvc_rms.std():.2f}")
+            
+        except Exception as e:
+            print(f"  Warning: Failed to load MVC for {subject_id}: {e}")
+            continue
+    
+    return mvc_dict
 
-    # Exclude S0, include S1-S5 (iPhone stopwatch) and S6-S10 (proper 12-timestamp protocol)
-    SKIP_SUBJECTS = {'S0'}  # S0 excluded per user request
+
+def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[SegmentRecord]]]], Optional[float], Optional[Dict[str, np.ndarray]]]:
+    """Load EMG data from S1, S2, S5-S10 (excluding S0, S3, S4).
+    Uses notes.txt for conditions and handles special cases.
+    
+    Returns:
+        data_dict: {condition: {object_id: [SegmentRecord]}}
+        inferred_fs: Sampling rate in Hz
+        mvc_dict: {subject_id: mvc_rms_per_channel} for MVC normalization
+    """
+
+    # Skip S0 (system test), S3 (only 5 sessions), S4 (only 8 sessions, irregular conditions)
+    # Include: S1, S2, S5-S10 (all with 9 sessions, 3 per condition)
+    SKIP_SUBJECTS = {'S0', 'S3', 'S4'}
     SKIP_SESSIONS = {
         'S1': {0, 1, 2},  # bad (0), mvc (1), bad (2)
         'S2': {0},  # mvc
@@ -1777,22 +2025,22 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
         'S4': {0, 4},  # mvc, fall
         'S5': {0},  # mvc
         'S6': {0, 10},  # rearranged, mvc
-        'S7': {0, 1, 2, 3, 8},  # mvc, disconnected, bad
-        'S8': {0},  # mvc (session 4 processed with first timestamp skipped)
-        'S9': {1},  # mvc (session 8 now has manual timestamps from notes.txt)
-        'S10': {0, 6},  # mvc, bad (session 4 processed with first timestamp skipped)
+        'S7': {0, 1, 2, 3, 8},  # mvc, disconnected (1-3), bad (8) - sessions 4-7, 9-13 available
+        'S8': {0, 5},  # mvc, skip session 5 (sessions 1-4, 6-10 = 9 sessions)
+        'S9': {1},  # mvc (sessions 2-8, 10, 13 = 9 sessions already)
+        'S10': {0, 6},  # mvc, bad (sessions 1-5, 7-10 = 9 sessions)
     }
     
     # Fallback conditions from notes.txt for sessions missing metadata
     FALLBACK_CONDITIONS = {
-        'S1': {3: 'no', 4: 'no', 5: 'passive', 6: 'passive', 7: 'passive', 8: 'active', 9: 'active', 10: 'active', 11: 'no'},
+        'S1': {3: 'no', 4: 'no', 5: 'no', 6: 'passive', 7: 'passive', 8: 'passive', 9: 'active', 10: 'active', 11: 'active'},  # 9 sessions: 3 per condition
         'S2': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'no', 5: 'no', 6: 'no', 7: 'active', 8: 'active', 9: 'active'},
         'S3': {2: 'active', 3: 'active', 4: 'active', 5: 'no', 6: 'no', 7: 'no', 8: 'passive', 9: 'passive', 10: 'passive'},
         'S4': {1: 'no', 2: 'no', 3: 'no', 5: 'redo', 6: 'active', 7: 'active', 8: 'active', 9: 'no extend', 10: 'passive', 11: 'passive', 12: 'passive'},
         'S5': {1: 'active', 2: 'active', 3: 'active', 4: 'passive', 5: 'passive', 6: 'passive', 7: 'no', 8: 'no', 9: 'no'},
         'S6': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'active', 5: 'active', 6: 'active', 7: 'no', 8: 'no', 9: 'no'},
-        'S7': {4: 'no', 5: 'no', 6: 'no', 7: 'passive', 9: 'passive', 10: 'passive', 11: 'active', 12: 'active', 13: 'active'},
-        'S8': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'no', 6: 'no', 7: 'passive', 8: 'active', 9: 'active', 10: 'active'},
+        'S7': {4: 'no', 5: 'no', 6: 'no', 7: 'passive', 9: 'passive', 10: 'passive', 11: 'active', 12: 'active', 13: 'active'},  # 9 sessions: 3 no, 3 passive, 3 active
+        'S8': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'no', 6: 'no', 7: 'no', 8: 'active', 9: 'active', 10: 'active'},
         'S9': {2: 'passive', 3: 'passive', 4: 'passive', 5: 'no', 6: 'no', 7: 'no', 8: 'active', 10: 'active', 13: 'active'},
         'S10': {1: 'no', 2: 'no', 3: 'no', 4: 'active', 5: 'active', 7: 'active', 8: 'passive', 9: 'passive', 10: 'passive'},
     }
@@ -1818,9 +2066,9 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
     for subject_dir in subject_dirs:
         subject_id = subject_dir.name.upper()
         
-        # Skip S0 entirely
+        # Skip S0 only (include S1-S10)
         if subject_id in SKIP_SUBJECTS:
-            print(f"Skipping {subject_id} (excluded per notes.txt)")
+            print(f"Skipping {subject_id} (excluded - insufficient sessions for balanced design)")
             continue
         
         logs_dir = subject_dir / 'emg_logs'
@@ -1988,32 +2236,42 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
                 loaded_count += 1
 
     if not data_dict:
-        return None, None
+        return None, None, None
 
     print(f"\n{'='*70}")
     print(f"Data Loading Summary:")
     print(f"  Sessions loaded: {loaded_count}")
     print(f"  Sessions skipped: {skipped_count}")
-    print(f"  S0 excluded (S1-S5 and S6-S10 included)")
+    print(f"  S0, S3, S4 excluded (S1, S2, S5-S10 included, balanced 3 sessions per condition)")
+    print(f"  Note: S7 has 8 sessions (3 no, 2 passive, 3 active)")
     print(f"{'='*70}\n")
 
+    # Load MVC references for all included subjects
+    print("Loading MVC references for normalization...")
+    included_subjects = sorted({seg.subject for cond_data in data_dict.values() 
+                               for obj_segs in cond_data.values() 
+                               for seg in obj_segs})
+    mvc_dict = load_mvc_references(data_dir, included_subjects)
+    print(f"MVC loaded for {len(mvc_dict)} subjects: {sorted(mvc_dict.keys())}\n")
+
     inferred_fs = float(np.median(fs_estimates)) if fs_estimates else None
-    return data_dict, inferred_fs
+    return data_dict, inferred_fs, mvc_dict
 
 
 def main():
     """Main analysis pipeline"""
     print("=" * 70)
-    print("EMG Comparative Analysis")
+    print("EMG Comparative Analysis with MVC Normalization")
     print("=" * 70)
     
     script_dir = Path(__file__).resolve().parent
     data_dir = script_dir / 'data' / 'healthy'
-    data_dict, inferred_fs = load_real_data(data_dir)
+    data_dict, inferred_fs, mvc_dict = load_real_data(data_dir)
     
     if data_dict is None:
         data_dict = generate_example_data(fs_hz=DEFAULT_FS_HZ)
         inferred_fs = DEFAULT_FS_HZ
+        mvc_dict = {}
         object_ids = list(range(NUM_GESTURES))
     else:
         if inferred_fs:
@@ -2026,6 +2284,14 @@ def main():
         if not object_ids:
             object_ids = list(range(NUM_GESTURES))
         else:
+            print(f"Available object IDs: {object_ids}")
+        
+        # Report MVC normalization status
+        if mvc_dict:
+            print(f"\nMVC normalization enabled for {len(mvc_dict)} subjects")
+            print("  All EMG values will be expressed as %MVC (percentage of maximum voluntary contraction)")
+        else:
+            print("\nWarning: No MVC data loaded - results will be in raw units")
             if len(object_ids) > NUM_GESTURES:
                 print(f"Detected {len(object_ids)} unique gestures; limiting analysis to first {NUM_GESTURES} IDs: {object_ids[:NUM_GESTURES]}")
                 object_ids = object_ids[:NUM_GESTURES]
@@ -2049,7 +2315,7 @@ def main():
         print(f"Warning: no object exists in all conditions; using object {primary_object}")
 
     loader = EMGDataLoader(data_dir)
-    analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs or DEFAULT_FS_HZ)
+    analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs or DEFAULT_FS_HZ, mvc_dict=mvc_dict)
 
     if analyzer.bandpass_effective_bounds:
         low_eff, high_eff = analyzer.bandpass_effective_bounds
@@ -2162,8 +2428,9 @@ def main():
     print("  - channel_rms_stats_object_{primary}.csv (exported RMS statistics)".replace('{primary}', str(primary_object)))
     print("\nNote: Statistical tests available in results-analysis/statistical_summary_*.md")
 
-    if analyzer.outlier_samples_replaced:
-        print(f"\nOutlier handling: replaced {analyzer.outlier_samples_replaced} samples with synthetic noise.")
+    # No filtering, no MVC normalization, no outlier replacement
+    print(f"\nData processing: RAW DATA ONLY - No bandpass filtering, No MVC normalization, Outliers kept as-is")
+
 
 
 if __name__ == '__main__':

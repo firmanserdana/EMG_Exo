@@ -395,7 +395,7 @@ def main():
     results_dir.mkdir(exist_ok=True)
     
     # Load data
-    data_dict, inferred_fs = load_real_data(data_dir)
+    data_dict, inferred_fs, mvc_dict = load_real_data(data_dir)
     if data_dict is None:
         print("Failed to load data")
         return
