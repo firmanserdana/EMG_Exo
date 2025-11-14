@@ -209,3 +209,8 @@ data/**/*.json
 *.svg
 
 *.md
+*.json
+
+*.md
+*.svg
+*.png
