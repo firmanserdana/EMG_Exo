@@ -152,6 +152,9 @@ public class ManagerDecodingFeedback : MonoBehaviour
         // Set the session as running
         SessionControl.isRunning = true;
 
+        // Send decoding_start event to Python backend
+        TcpServerManager.Instance.SendMessageToClient("decoding_start");
+
         Debug.Log("Session start");
     }
 
@@ -159,6 +162,9 @@ public class ManagerDecodingFeedback : MonoBehaviour
     {
         // Stop the session
         SessionControl.isRunning = false;
+
+        // Send decoding_stop event to Python backend
+        TcpServerManager.Instance.SendMessageToClient("decoding_stop");
 
         // GUI updates
         btnPlay.interactable = true;
