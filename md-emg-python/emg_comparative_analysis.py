@@ -15,15 +15,23 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib import colors as mcolors
+from matplotlib import cm
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Circle
 from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional, Set, Iterable
 import json
 import re
+import xml.etree.ElementTree as ET
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from scipy import signal as sp_signal
+from scipy import stats
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+from scipy.spatial import QhullError
 import warnings
 
 warnings.filterwarnings('ignore')
@@ -33,7 +41,8 @@ DEFAULT_FS_HZ = 1000  # Default sampling rate in Hz; overwritten if inferred fro
 NUM_CHANNELS = 32  # Number of EMG channels
 NUM_GESTURES = 6  # Number of gestures/objects to analyze
 CHANNEL_IDS = list(range(NUM_CHANNELS))  # Channel indices
-CONDITIONS = ['Passive glove', 'Active glove', 'No glove']
+CONDITIONS = ['No glove', 'Passive glove', 'Active glove']
+BASE_CONDITION = 'No glove'
 CONDITION_COLORS = {
     'Passive glove': '#1f77b4',
     'Active glove': '#ff7f0e', 
@@ -45,6 +54,19 @@ MATLAB_CONDITION_BASE_COLORS = {
     'Passive glove': (0.0, 0.6, 0.3), # green family
     'Active glove': (0.9, 0.2, 0.5)   # pink/magenta family
 }
+
+EMG_SPATIAL_COLOR_STOPS = [
+    (0.0, '#050A30'),   # deep navy lows
+    (0.18, '#0B3B8C'),  # cobalt transition
+    (0.38, '#1E91D6'),  # cyan/teal mids
+    (0.62, '#5BCB53'),  # lime for active bands
+    (0.82, '#F6C443'),  # golden high activity
+    (1.0, '#F2542D')    # saturated hot spots
+]
+EMG_SPATIAL_CMAP = LinearSegmentedColormap.from_list('emg_spatial', EMG_SPATIAL_COLOR_STOPS, N=512)
+# Register colormap if not already present
+if 'emg_spatial' not in plt.colormaps():
+    plt.colormaps.register(EMG_SPATIAL_CMAP)
 
 # Spatial layout of electrodes on the sleeve (based on photo)
 # The sleeve has electrodes arranged in rows - map to physical layout
@@ -100,6 +122,92 @@ CONDITION_ALIASES = {
 }
 
 
+def ordered_conditions(source_conditions: Iterable[str]) -> List[str]:
+    """Return available conditions in the configured display order."""
+
+    return [cond for cond in CONDITIONS if cond in source_conditions]
+
+
+def summarize_condition_values(
+    values_by_condition: Dict[str, List[float]]
+) -> Tuple[List[str], Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
+    """Compute mean/median stats and baseline comparisons for each condition."""
+
+    summary: Dict[str, Dict[str, float]] = {}
+    available: List[str] = []
+
+    for condition in CONDITIONS:
+        raw_values = values_by_condition.get(condition)
+        if raw_values is None or len(raw_values) == 0:
+            continue
+
+        arr = np.asarray(raw_values, dtype=float)
+        stats_entry = {
+            '_values': arr,
+            'mean': float(np.mean(arr)),
+            'median': float(np.median(arr)),
+            'std': float(np.std(arr, ddof=1)) if arr.size > 1 else 0.0,
+            'n': int(arr.size)
+        }
+
+        summary[condition] = stats_entry
+        available.append(condition)
+
+    comparisons: Dict[str, Dict[str, float]] = {}
+    base_stats = summary.get(BASE_CONDITION)
+
+    if base_stats and base_stats['n'] > 1:
+        base_values = base_stats['_values']
+        for condition in available:
+            if condition == BASE_CONDITION:
+                continue
+
+            cond_stats = summary.get(condition)
+            if not cond_stats or cond_stats['n'] < 2:
+                continue
+
+            base_mean = base_stats['mean'] if base_stats['mean'] != 0 else np.nan
+            ratio = cond_stats['mean'] / base_mean if base_mean and not np.isnan(base_mean) else np.nan
+            p_val = stats.ttest_ind(cond_stats['_values'], base_values, equal_var=False).pvalue
+            comparisons[condition] = {
+                'ratio': float(ratio) if ratio == ratio else np.nan,  # NaN-safe
+                'p_value': float(p_val)
+            }
+
+    # Drop raw arrays from summary before returning to keep structure light
+    for stats_entry in summary.values():
+        stats_entry.pop('_values', None)
+
+    return available, summary, comparisons
+
+
+def format_stats_text(
+    condition_order: List[str],
+    summary: Dict[str, Dict[str, float]],
+    comparisons: Dict[str, Dict[str, float]]
+) -> str:
+    """Return multiline string describing per-condition stats and comparisons."""
+
+    lines: List[str] = []
+    for condition in condition_order:
+        stats_entry = summary.get(condition)
+        if not stats_entry:
+            continue
+
+        lines.append(
+            f"{condition}: mean={stats_entry['mean']:.2f}, median={stats_entry['median']:.2f}, n={stats_entry['n']}"
+        )
+
+        if condition in comparisons:
+            comp = comparisons[condition]
+            ratio_text = f"{comp['ratio']:.2f}x" if comp['ratio'] == comp['ratio'] else 'n/a'
+            lines.append(
+                f"  vs {BASE_CONDITION}: ratio={ratio_text}, p={comp['p_value']:.3e}"
+            )
+
+    return "\n".join(lines)
+
+
 def normalize_condition(condition_name: Optional[str]) -> Optional[str]:
     """Normalize condition labels to the canonical set used in plots."""
     if not condition_name:
@@ -123,6 +231,221 @@ class SegmentRecord:
     session: str
     start_time: float
     end_time: float
+
+
+@dataclass(frozen=True)
+class ChannelNode:
+    """Geometry for a single electrode node in the SVG layout."""
+
+    index: int
+    x: float
+    y: float
+    band: str
+    row: str
+
+
+@dataclass(frozen=True)
+class SvgHeatmapLayout:
+    """Pre-parsed SVG layout that maps channels onto 2D coordinates."""
+
+    nodes: List[ChannelNode]
+    rows: List[List[int]]
+    width: float
+    height: float
+    radius: float
+
+
+SVG_LAYOUT_PATH = Path(__file__).with_name('emg_heatmap.svg')
+_SVG_LAYOUT_CACHE: Optional[SvgHeatmapLayout] = None
+
+
+def _parse_svg_layout(svg_path: Path) -> SvgHeatmapLayout:
+    """Load channel coordinates from the shared emg_heatmap.svg layout."""
+
+    if not svg_path.exists():
+        raise FileNotFoundError(f"Missing SVG layout: {svg_path}")
+
+    tree = ET.parse(str(svg_path))
+    root = tree.getroot()
+
+    def _parse_float(value: Optional[str], default: float = 0.0) -> float:
+        if value is None:
+            return default
+        value = value.strip()
+        if value.endswith('pt'):
+            value = value[:-2]
+        return float(value)
+
+    width = _parse_float(root.attrib.get('width'), 600.0)
+    height = _parse_float(root.attrib.get('height'), 400.0)
+
+    # Attempt to read default radius from first circle element
+    circle_elements = root.findall('.//{*}circle')
+    default_radius = _parse_float(circle_elements[0].attrib.get('r'), 24.0) if circle_elements else 24.0
+
+    metadata = root.find('.//{*}metadata')
+    mapping = metadata.find('.//{*}emg-mapping') if metadata is not None else None
+
+    nodes: List[ChannelNode] = []
+    rows: List[List[int]] = []
+    channel_idx = 0
+
+    if mapping is not None:
+        for band in mapping.findall('.//{*}band'):
+            band_id = band.get('id', 'band')
+            for row in band.findall('.//{*}row'):
+                row_id = row.get('id', '')
+                channels_count = int(row.get('channels', '0'))
+                start_x = _parse_float(row.get('start_x'))
+                start_y = _parse_float(row.get('start_y'))
+                spacing_x = _parse_float(row.get('spacing_x'))
+                spacing_y = _parse_float(row.get('spacing_y'))
+
+                row_indices: List[int] = []
+                for offset in range(channels_count):
+                    x = start_x + offset * spacing_x
+                    y = start_y + offset * spacing_y
+                    nodes.append(
+                        ChannelNode(
+                            index=channel_idx,
+                            x=x,
+                            y=y,
+                            band=band_id,
+                            row=f"{band_id}_{row_id}"
+                        )
+                    )
+                    row_indices.append(channel_idx)
+                    channel_idx += 1
+                rows.append(row_indices)
+
+    if not nodes:
+        raise ValueError('SVG layout did not define any electrode nodes.')
+
+    return SvgHeatmapLayout(nodes=nodes, rows=rows, width=width, height=height, radius=default_radius * 0.8)
+
+
+def get_svg_heatmap_layout() -> SvgHeatmapLayout:
+    """Return the cached SVG layout for electrode rendering."""
+
+    global _SVG_LAYOUT_CACHE
+    if _SVG_LAYOUT_CACHE is None:
+        _SVG_LAYOUT_CACHE = _parse_svg_layout(SVG_LAYOUT_PATH)
+    return _SVG_LAYOUT_CACHE
+
+
+def draw_svg_heatmap(
+    ax: plt.Axes,
+    channel_values: np.ndarray,
+    layout: Optional[SvgHeatmapLayout] = None,
+    cmap: str = 'emg_spatial',
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
+    annotate: bool = True,
+    spacing_scale: float = 0.7,
+    blur_sigma: float = 7.0
+) -> cm.ScalarMappable:
+    """Render channel amplitudes using the shared SVG layout with a blurred field."""
+
+    layout = layout or get_svg_heatmap_layout()
+    values = np.asarray(channel_values, dtype=float)
+    if values.ndim != 1:
+        values = values.flatten()
+
+    node_indices = [node.index for node in layout.nodes if node.index < values.size]
+    if not node_indices:
+        raise ValueError('No channel data available for spatial heatmap rendering.')
+
+    coords = np.array([[layout.nodes[idx].x, layout.nodes[idx].y] for idx in node_indices])
+    center = coords.mean(axis=0)
+    scaled_coords = center + (coords - center) * spacing_scale
+
+    data_vmin = float(np.nanmin(values[node_indices]))
+    data_vmax = float(np.nanmax(values[node_indices]))
+    norm = mcolors.Normalize(
+        vmin if vmin is not None else data_vmin,
+        vmax if vmax is not None else data_vmax
+    )
+    cmap_obj = cm.get_cmap(cmap)
+    sm = cm.ScalarMappable(norm=norm, cmap=cmap_obj)
+
+    # Interpolate blurred background
+    pad_extent = layout.radius * 2.0
+    grid_x = np.linspace(scaled_coords[:, 0].min() - pad_extent, scaled_coords[:, 0].max() + pad_extent, 520)
+    grid_y = np.linspace(scaled_coords[:, 1].min() - pad_extent, scaled_coords[:, 1].max() + pad_extent, 320)
+    grid_xx, grid_yy = np.meshgrid(grid_x, grid_y)
+
+    points = scaled_coords
+    values_subset = values[node_indices]
+
+    def _griddata(method: str):
+        return griddata(points, values_subset, (grid_xx, grid_yy), method=method)
+
+    try:
+        heat = _griddata('cubic')
+    except QhullError:
+        heat = None
+
+    if heat is None or np.isnan(heat).all():
+        heat = _griddata('linear')
+
+    if heat is None or np.isnan(heat).all():
+        heat = _griddata('nearest')
+
+    nearest = _griddata('nearest')
+    if nearest is not None:
+        mask = np.isnan(heat)
+        heat[mask] = nearest[mask]
+
+    if blur_sigma and blur_sigma > 0:
+        heat = gaussian_filter(heat, sigma=blur_sigma, mode='nearest')
+
+    extent = [grid_x.min(), grid_x.max(), grid_y.max(), grid_y.min()]
+    heat_norm = norm(heat)
+    heat_norm = np.clip(heat_norm, 0.0, 1.0)
+    heat_rgba = cmap_obj(heat_norm)
+    alpha_map = np.clip(np.power(heat_norm, 0.85), 0.12, 0.98)
+    heat_rgba[..., -1] = alpha_map
+    ax.imshow(heat_rgba, extent=extent, origin='upper')
+
+    # Draw filled circles per channel (no connector lines)
+    scatter = ax.scatter(
+        scaled_coords[:, 0],
+        scaled_coords[:, 1],
+        c=values_subset,
+        cmap=cmap_obj,
+        norm=norm,
+        s=layout.radius**2 * 14,
+        edgecolors='none',
+        linewidths=0.0,
+        alpha=0.8,
+        zorder=3
+    )
+
+    if annotate:
+        for (x, y), idx in zip(scaled_coords, node_indices):
+            val = float(values[idx])
+            text_color = 'black' if norm(val) < 0.55 else 'white'
+            ax.text(
+                x,
+                y,
+                f'{idx + 1}',
+                ha='center',
+                va='center',
+                fontsize=7,
+                color=text_color,
+                fontweight='bold',
+                zorder=4
+            )
+
+    pad_x = (scaled_coords[:, 0].max() - scaled_coords[:, 0].min()) * 0.08
+    pad_y = (scaled_coords[:, 1].max() - scaled_coords[:, 1].min()) * 0.08
+    ax.set_xlim(scaled_coords[:, 0].min() - pad_x, scaled_coords[:, 0].max() + pad_x)
+    ax.set_ylim(scaled_coords[:, 1].max() + pad_y, scaled_coords[:, 1].min() - pad_y)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    ax.set_facecolor('none')
+
+    return sm
 
 
 class EMGDataLoader:
@@ -1100,8 +1423,8 @@ class EMGAnalyzer:
             object_id: Which object/pattern to plot
             save_prefix: Prefix for saved figure
         """
-        valid_conditions = []
-        condition_data = {}
+        condition_data: Dict[str, np.ndarray] = {}
+        condition_segment_means: Dict[str, List[float]] = defaultdict(list)
         
         # Collect and prepare data
         for condition in CONDITIONS:
@@ -1110,7 +1433,6 @@ class EMGAnalyzer:
             records = data_dict[condition][object_id]
             if not records:
                 continue
-            valid_conditions.append(condition)
             
             # Average all segments for this condition
             all_segments = []
@@ -1118,6 +1440,7 @@ class EMGAnalyzer:
                 segment = self._normalize_segment(record.samples, record.subject)
                 rms = self.compute_rms(segment, window_ms=100)
                 all_segments.append(rms)
+                condition_segment_means[condition].append(float(np.mean(rms)))
             
             # Find common length and average
             min_len = min(seg.shape[0] for seg in all_segments)
@@ -1125,9 +1448,16 @@ class EMGAnalyzer:
             avg_rms = np.mean(trimmed, axis=0)
             condition_data[condition] = avg_rms
         
-        if not valid_conditions:
+        if not condition_data:
             print(f"No valid data for object {object_id}")
             return None
+
+        plot_conditions, condition_stats, condition_comparisons = summarize_condition_values(
+            condition_segment_means
+        )
+
+        if not plot_conditions:
+            plot_conditions = ordered_conditions(condition_data.keys())
         
         # Create comprehensive comparison figure
         fig = plt.figure(figsize=(20, 12))
@@ -1137,7 +1467,7 @@ class EMGAnalyzer:
         vmin = min(data.min() for data in condition_data.values())
         vmax = max(data.max() for data in condition_data.values())
         
-        for idx, condition in enumerate(valid_conditions):
+        for idx, condition in enumerate(plot_conditions):
             ax = fig.add_subplot(gs[0, idx])
             data = condition_data[condition]
             
@@ -1156,17 +1486,20 @@ class EMGAnalyzer:
         ax_bar = fig.add_subplot(gs[1, :])
         
         channel_means = {}
-        for condition in valid_conditions:
+        for condition in plot_conditions:
             channel_means[condition] = condition_data[condition].mean(axis=0)
         
         x = np.arange(NUM_CHANNELS)
         width = 0.25
         
-        for idx, condition in enumerate(valid_conditions):
+        for idx, condition in enumerate(plot_conditions):
             offset = (idx - 1) * width
             color = MATLAB_CONDITION_BASE_COLORS.get(condition, CONDITION_COLORS.get(condition, '#1f77b4'))
             ax_bar.bar(x + offset, channel_means[condition], width, 
                       label=condition, alpha=0.8, color=color, edgecolor='black', linewidth=0.5)
+        if channel_means:
+            bar_max = max(values.max() for values in channel_means.values())
+            ax_bar.set_ylim(0, bar_max * 1.1 if bar_max > 0 else 1)
         
         ax_bar.set_xlabel('Channel', fontsize=12, fontweight='bold')
         ax_bar.set_ylabel('Mean RMS Amplitude (a.u.)', fontsize=12, fontweight='bold')
@@ -1181,7 +1514,7 @@ class EMGAnalyzer:
         
         violin_data = []
         violin_labels = []
-        for condition in valid_conditions:
+        for condition in plot_conditions:
             violin_data.append(condition_data[condition].flatten())
             violin_labels.append(condition)
         
@@ -1194,11 +1527,27 @@ class EMGAnalyzer:
             pc.set_facecolor(color)
             pc.set_alpha(0.7)
         
-        ax_violin.set_xticks(range(len(valid_conditions)))
+        ax_violin.set_xticks(range(len(plot_conditions)))
         ax_violin.set_xticklabels(violin_labels, fontsize=12, fontweight='bold')
         ax_violin.set_ylabel('RMS Amplitude (a.u.)', fontsize=12, fontweight='bold')
         ax_violin.set_title('Amplitude Distribution Comparison', fontsize=14, fontweight='bold')
         ax_violin.grid(True, alpha=0.3, axis='y')
+        if violin_data:
+            violin_max = max(np.max(values) for values in violin_data)
+            ax_violin.set_ylim(0, violin_max * 1.1 if violin_max > 0 else 1)
+        for idx, condition in enumerate(plot_conditions):
+            stats_entry = condition_stats.get(condition)
+            if not stats_entry:
+                continue
+            ax_violin.text(
+                idx,
+                stats_entry['median'],
+                f"μ={stats_entry['mean']:.1f}\nmed={stats_entry['median']:.1f}",
+                ha='center',
+                va='center',
+                fontsize=9,
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.85)
+            )
         
         # Time-series overlay of mean across all channels
         ax_overlay = fig.add_subplot(gs[2, 2])
@@ -1206,7 +1555,7 @@ class EMGAnalyzer:
         # Find max length for proper x-axis and pad shorter signals
         max_len = max(condition_data[c].shape[0] for c in valid_conditions)
         
-        for condition in valid_conditions:
+        for condition in plot_conditions:
             data = condition_data[condition]
             mean_over_channels = data.mean(axis=1)
             
@@ -1227,10 +1576,24 @@ class EMGAnalyzer:
         ax_overlay.legend(fontsize=9)
         ax_overlay.grid(True, alpha=0.3)
         ax_overlay.set_xlim(0, max_len)  # Set proper x-axis limit
+        ax_overlay.set_ylim(bottom=0)
         
         # Overall figure title
         fig.suptitle(f'Comprehensive EMG Comparison Across Conditions - Object {object_id}', 
                     fontsize=18, fontweight='bold', y=0.98)
+
+        stats_text = format_stats_text(plot_conditions, condition_stats, condition_comparisons)
+        if stats_text:
+            fig.text(
+                0.01,
+                0.01,
+                stats_text,
+                ha='left',
+                va='bottom',
+                fontsize=10,
+                family='monospace',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+            )
         
         # Save figure as SVG for publication
         save_path = self.results_dir / f'{save_prefix}_object_{object_id}.svg'
@@ -1273,14 +1636,20 @@ class EMGAnalyzer:
         if not condition_rms_values:
             print(f"No valid data for amplitude summary of object {object_id}")
             return None
+
+        plot_conditions, summary_stats, comparisons = summarize_condition_values(
+            condition_mean_per_segment
+        )
+        if not plot_conditions:
+            plot_conditions = ordered_conditions(condition_rms_values.keys())
         
         # Create figure with 2 subplots
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
         
         # Subplot 1: Box plot of all RMS values
-        positions = list(range(len(condition_rms_values)))
-        box_data = [condition_rms_values[c] for c in CONDITIONS if c in condition_rms_values]
-        labels = [c for c in CONDITIONS if c in condition_rms_values]
+        labels = [c for c in plot_conditions if c in condition_rms_values]
+        positions = list(range(len(labels)))
+        box_data = [condition_rms_values[c] for c in labels]
         colors = [MATLAB_CONDITION_BASE_COLORS.get(c, '#1f77b4') for c in labels]
         
         bp = ax1.boxplot(box_data, positions=positions, widths=0.6, patch_artist=True,
@@ -1310,17 +1679,26 @@ class EMGAnalyzer:
         ax1.set_title('Overall Amplitude Distribution', fontsize=14, fontweight='bold')
         ax1.grid(True, alpha=0.3, axis='y')
         ax1.legend(fontsize=10)
+        ax1.set_ylim(bottom=0)
         
         # Add mean values as text
         for idx, condition in enumerate(labels):
-            mean_val = condition_rms_values[condition].mean()
-            ax1.text(idx, ax1.get_ylim()[1] * 0.95, f'{mean_val:.1f}',
-                    ha='center', fontsize=11, fontweight='bold',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            stats_entry = summary_stats.get(condition)
+            if not stats_entry:
+                continue
+            ax1.text(
+                idx,
+                ax1.get_ylim()[1] * 0.9,
+                f"μ={stats_entry['mean']:.1f}\nmed={stats_entry['median']:.1f}",
+                ha='center',
+                fontsize=10,
+                fontweight='bold',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.85)
+            )
         
         # Subplot 2: Mean per segment with statistical comparison
-        positions2 = list(range(len(condition_mean_per_segment)))
-        labels2 = [c for c in CONDITIONS if c in condition_mean_per_segment]
+        labels2 = [c for c in plot_conditions if c in condition_mean_per_segment]
+        positions2 = list(range(len(labels2)))
         
         # Violin plot
         parts = ax2.violinplot([condition_mean_per_segment[c] for c in labels2],
@@ -1347,13 +1725,26 @@ class EMGAnalyzer:
         ax2.set_title(f'Segment-wise Comparison (n={[len(condition_mean_per_segment[c]) for c in labels2]})', 
                      fontsize=14, fontweight='bold')
         ax2.grid(True, alpha=0.3, axis='y')
+        ax2.set_ylim(bottom=0)
         
         # Statistical tests moved to separate summary files
         # See: results-analysis/statistical_summary_amplitude.md
         
         fig.suptitle(f'Statistical Amplitude Comparison - Object {object_id}', 
                     fontsize=16, fontweight='bold')
-        plt.tight_layout()
+        stats_text = format_stats_text(plot_conditions, summary_stats, comparisons)
+        if stats_text:
+            fig.text(
+                0.5,
+                0.01,
+                stats_text,
+                ha='center',
+                va='bottom',
+                fontsize=10,
+                family='monospace',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+            )
+        plt.tight_layout(rect=(0, 0.04, 1, 1))
         
         # Save as SVG
         save_path_svg = self.results_dir / f'{save_prefix}_object_{object_id}.svg'
@@ -1528,8 +1919,6 @@ class EMGAnalyzer:
         Spatial heatmap showing mean RMS per electrode in physical sleeve layout.
         Shows both mean across all segments and example from one subject.
         """
-        channel_layout = get_channel_spatial_layout()
-        
         # Collect data for each condition
         condition_means = {}
         condition_examples = {}
@@ -1561,12 +1950,14 @@ class EMGAnalyzer:
         
         # Create figure with 2 rows: Mean and Example
         fig, axes = plt.subplots(2, len(condition_means), figsize=(5 * len(condition_means), 8))
+        fig.patch.set_alpha(0.0)
         if len(condition_means) == 1:
             axes = axes.reshape(-1, 1)
         
         # Global color scale
         all_values = np.concatenate([v for v in condition_means.values()])
         vmin, vmax = all_values.min(), all_values.max()
+        layout = get_svg_heatmap_layout()
         
         # Row 1: Mean RMS across all segments
         for idx, condition in enumerate(CONDITIONS):
@@ -1574,32 +1965,18 @@ class EMGAnalyzer:
                 continue
             
             ax = axes[0, idx]
-            
-            # Map channels to spatial layout
-            spatial_map = np.zeros_like(channel_layout, dtype=float)
-            for row in range(channel_layout.shape[0]):
-                for col in range(channel_layout.shape[1]):
-                    ch = channel_layout[row, col]
-                    spatial_map[row, col] = condition_means[condition][ch]
-            
-            im = ax.imshow(spatial_map, cmap='hot', vmin=vmin, vmax=vmax, 
-                          interpolation='bilinear', aspect='auto')
-            
-            # Add channel labels
-            for row in range(channel_layout.shape[0]):
-                for col in range(channel_layout.shape[1]):
-                    ch = channel_layout[row, col]
-                    ax.text(col, row, f'{ch}', ha='center', va='center', 
-                           fontsize=7, color='white' if spatial_map[row, col] > (vmin + vmax)/2 else 'black')
+            sm = draw_svg_heatmap(
+                ax,
+                condition_means[condition],
+                layout=layout,
+                vmin=vmin,
+                vmax=vmax,
+                cmap='magma'
+            )
             
             ax.set_title(f'{condition}\nMean: {condition_means[condition].mean():.1f} a.u.', 
                         fontsize=13, fontweight='bold')
-            ax.set_xlabel('Electrode Column', fontsize=10)
-            ax.set_ylabel('Row', fontsize=10)
-            ax.set_yticks([0, 1])
-            ax.set_yticklabels(['Top', 'Bottom'])
-            
-            plt.colorbar(im, ax=ax, label='Mean RMS (a.u.)')
+            plt.colorbar(sm, ax=ax, label='Mean RMS (a.u.)')
         
         # Row 2: Example from one subject
         for idx, condition in enumerate(CONDITIONS):
@@ -1607,35 +1984,21 @@ class EMGAnalyzer:
                 continue
             
             ax = axes[1, idx]
-            
-            # Map channels to spatial layout
-            spatial_map = np.zeros_like(channel_layout, dtype=float)
-            for row in range(channel_layout.shape[0]):
-                for col in range(channel_layout.shape[1]):
-                    ch = channel_layout[row, col]
-                    spatial_map[row, col] = condition_examples[condition][ch]
-            
-            im = ax.imshow(spatial_map, cmap='hot', vmin=vmin, vmax=vmax, 
-                          interpolation='bilinear', aspect='auto')
-            
-            # Add channel labels
-            for row in range(channel_layout.shape[0]):
-                for col in range(channel_layout.shape[1]):
-                    ch = channel_layout[row, col]
-                    ax.text(col, row, f'{ch}', ha='center', va='center', 
-                           fontsize=7, color='white' if spatial_map[row, col] > (vmin + vmax)/2 else 'black')
+            sm = draw_svg_heatmap(
+                ax,
+                condition_examples[condition],
+                layout=layout,
+                vmin=vmin,
+                vmax=vmax,
+                cmap='magma'
+            )
             
             ax.set_title(f'Example Subject\nMean: {condition_examples[condition].mean():.1f} a.u.', 
                         fontsize=12, fontweight='bold')
-            ax.set_xlabel('Electrode Column', fontsize=10)
-            ax.set_ylabel('Row', fontsize=10)
-            ax.set_yticks([0, 1])
-            ax.set_yticklabels(['Top', 'Bottom'])
-            
-            plt.colorbar(im, ax=ax, label='RMS (a.u.)')
-        
-        axes[0, 0].set_ylabel('MEAN\n(All Subjects)\n\nRow', fontsize=11, fontweight='bold')
-        axes[1, 0].set_ylabel('EXAMPLE\n(1 Subject)\n\nRow', fontsize=11, fontweight='bold')
+            plt.colorbar(sm, ax=ax, label='RMS (a.u.)')
+
+        fig.text(0.02, 0.74, 'MEAN\n(All Subjects)', fontsize=11, fontweight='bold', va='center')
+        fig.text(0.02, 0.32, 'EXAMPLE\n(1 Subject)', fontsize=11, fontweight='bold', va='center')
         
         fig.suptitle(f'Spatial EMG Activity Map - Object {object_id}', 
                     fontsize=16, fontweight='bold')
@@ -1667,8 +2030,7 @@ class EMGAnalyzer:
         heatmap_dir = self.results_dir / 'emg_heatmap'
         heatmap_dir.mkdir(parents=True, exist_ok=True)
         
-        # Get channel layout
-        channel_layout = get_channel_spatial_layout()
+        layout = get_svg_heatmap_layout()
         
         if object_ids is None:
             # Get all available object IDs
@@ -1734,6 +2096,7 @@ class EMGAnalyzer:
                     continue
                 
                 fig, axes = plt.subplots(1, n_conditions, figsize=(6 * n_conditions, 6))
+                fig.patch.set_alpha(0.0)
                 if n_conditions == 1:
                     axes = [axes]
                 
@@ -1743,45 +2106,19 @@ class EMGAnalyzer:
                 
                 for idx, condition in enumerate(present_conditions):
                     ax = axes[idx]
-                    
-                    # Map channels to spatial layout
-                    spatial_map = np.full_like(channel_layout, np.nan, dtype=float)
-                    for row in range(channel_layout.shape[0]):
-                        for col in range(channel_layout.shape[1]):
-                            ch = channel_layout[row, col]
-                            if ch >= 0:  # Valid channel (not padding)
-                                spatial_map[row, col] = subject_data[condition][ch]
-                    
-                    # Create masked array to hide -1 (empty) positions
-                    masked_map = np.ma.masked_where(channel_layout == -1, spatial_map)
-                    
-                    # Use bilinear interpolation for smoother appearance like figureC
-                    im = ax.imshow(masked_map, cmap='hot', vmin=vmin, vmax=vmax, 
-                                  interpolation='bilinear', aspect='auto')
-                    
-                    # Add channel labels (1-indexed for display)
-                    for row in range(channel_layout.shape[0]):
-                        for col in range(channel_layout.shape[1]):
-                            ch = channel_layout[row, col]
-                            if ch >= 0:  # Valid channel
-                                value = spatial_map[row, col]
-                                # Use white text on dark background, black on light
-                                text_color = 'white' if value > (vmin + vmax)/2 else 'black'
-                                ax.text(col, row, f'{ch+1}', ha='center', va='center', 
-                                       fontsize=7, color=text_color)
+                    sm = draw_svg_heatmap(
+                        ax,
+                        subject_data[condition],
+                        layout=layout,
+                        vmin=vmin,
+                        vmax=vmax,
+                        cmap='magma'
+                    )
                     
                     mean_val = subject_data[condition].mean()
                     ax.set_title(f'{condition}\nMean: {mean_val:.1f} %MVC', 
                                 fontsize=13, fontweight='bold')
-                    ax.set_xlabel('Electrode Column', fontsize=10)
-                    ax.set_ylabel('Row', fontsize=10)
-                    
-                    # Set tick labels to match the band structure
-                    ax.set_xticks(range(channel_layout.shape[1]))
-                    ax.set_yticks(range(channel_layout.shape[0]))
-                    
-                    # Add colorbar
-                    cbar = plt.colorbar(im, ax=ax, label='%MVC')
+                    cbar = plt.colorbar(sm, ax=ax, label='%MVC')
                 
                 fig.suptitle(f'Spatial EMG Activity Map: {subject} - Object {obj_id}', 
                             fontsize=16, fontweight='bold')
@@ -1966,8 +2303,6 @@ class EMGAnalyzer:
             
             # Add magnitude comparison annotation with statistical test
             # Calculate overall magnitude (L2 norm across all PCs)
-            from scipy import stats
-            
             condition_magnitudes = {}
             condition_magnitude_values = {}
             for condition in present_conditions:

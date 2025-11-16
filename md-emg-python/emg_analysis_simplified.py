@@ -17,11 +17,10 @@ from collections import defaultdict
 
 # Configuration
 NUM_CHANNELS = 32
-CONDITIONS = ['Passive glove', 'Active glove', 'No glove']
 CONDITION_COLORS = {
+    'No glove': '#95E1D3',
     'Passive glove': '#FF6B6B',
-    'Active glove': '#4ECDC4', 
-    'No glove': '#95E1D3'
+    'Active glove': '#4ECDC4'
 }
 
 @dataclass
@@ -35,7 +34,18 @@ class SegmentRecord:
 # Import load functions from main script
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from emg_comparative_analysis import load_real_data, EMGDataLoader, EMGAnalyzer
+from emg_comparative_analysis import (
+    load_real_data,
+    EMGDataLoader,
+    EMGAnalyzer,
+    summarize_condition_values,
+    format_stats_text,
+    CONDITIONS as ANALYSIS_CONDITIONS,
+    get_svg_heatmap_layout,
+    draw_svg_heatmap
+)
+
+CONDITIONS = list(ANALYSIS_CONDITIONS)
 
 def create_temporal_comparison_per_object(data_dict, analyzer, results_dir):
     """Figure B: Temporal comparison using mean absolute value for each object"""
@@ -43,6 +53,7 @@ def create_temporal_comparison_per_object(data_dict, analyzer, results_dir):
     for obj_id in range(6):
         fig, ax = plt.subplots(figsize=(12, 6))
         
+        condition_segment_means = defaultdict(list)
         valid_conditions = []
         for condition in CONDITIONS:
             if condition not in data_dict or obj_id not in data_dict[condition]:
@@ -69,6 +80,7 @@ def create_temporal_comparison_per_object(data_dict, analyzer, results_dir):
                 # Use mean absolute value across channels
                 mean_abs = np.abs(rms).mean(axis=1)
                 all_segments.append(mean_abs)
+                condition_segment_means[condition].append(float(mean_abs.mean()))
             
             # Truncate to shortest segment
             min_seg_len = min(seg.shape[0] for seg in all_segments)
@@ -78,14 +90,21 @@ def create_temporal_comparison_per_object(data_dict, analyzer, results_dir):
             condition_data[condition] = avg
             min_len = min(min_len, len(avg))
         
+        if not condition_data:
+            plt.close(fig)
+            continue
+
+        plot_conditions, summary_stats, comparisons = summarize_condition_values(condition_segment_means)
+        if not plot_conditions:
+            plot_conditions = [c for c in CONDITIONS if c in condition_data]
         # Truncate all to minimum length (no padding)
-        for condition in valid_conditions:
+        for condition in plot_conditions:
             condition_data[condition] = condition_data[condition][:min_len]
         
         # Plot
         time_axis = np.arange(min_len) / 1000.0  # Convert to seconds (assuming 1000 Hz)
         
-        for condition in valid_conditions:
+        for condition in plot_conditions:
             data = condition_data[condition]
             color = CONDITION_COLORS.get(condition, '#1f77b4')
             n_samples = len(data_dict[condition][obj_id])
@@ -97,6 +116,20 @@ def create_temporal_comparison_per_object(data_dict, analyzer, results_dir):
         ax.set_title(f'Temporal Comparison - Object {obj_id}', fontsize=15, fontweight='bold')
         ax.legend(fontsize=11, frameon=True, loc='best')
         ax.grid(True, alpha=0.3)
+        ax.set_ylim(bottom=0)
+
+        stats_text = format_stats_text(plot_conditions, summary_stats, comparisons)
+        if stats_text:
+            fig.text(
+                0.01,
+                0.01,
+                stats_text,
+                ha='left',
+                va='bottom',
+                fontsize=9,
+                family='monospace',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+            )
         
         plt.tight_layout()
         save_path = results_dir / f'figureB_temporal_object_{obj_id}.svg'
@@ -129,28 +162,33 @@ def create_spatial_heatmap_single_subject(data_dict, analyzer, results_dir, obj_
     
     # Create 2x16 spatial grid
     fig, axes = plt.subplots(3, 1, figsize=(16, 10))
+    fig.patch.set_alpha(0.0)
     fig.suptitle(f'Spatial EMG Activity Map - Object {obj_id} - Subject {example_subject}',
                 fontsize=16, fontweight='bold')
-    
-    layout = np.zeros((2, 16), dtype=int)
-    layout[0, :] = range(16)  # Top row: 0-15
-    layout[1, :] = range(16, 32)  # Bottom row: 16-31
     
     # Calculate RMS for each condition
     vmin, vmax = float('inf'), float('-inf')
     condition_rms = {}
+    condition_segment_means = defaultdict(list)
     
     for condition in CONDITIONS:
         records = subject_data[example_subject][condition]
         if records:
-            record = records[0]
-            segment = analyzer._normalize_segment(record.samples, record.subject)
-            rms = analyzer.compute_rms(segment, window_ms=100)
-            channel_rms = rms.mean(axis=0)  # Mean over time
-            condition_rms[condition] = channel_rms
-            vmin = min(vmin, channel_rms.min())
-            vmax = max(vmax, channel_rms.max())
+            channel_rms_list = []
+            for record in records:
+                segment = analyzer._normalize_segment(record.samples, record.subject)
+                rms = analyzer.compute_rms(segment, window_ms=100)
+                channel_rms = rms.mean(axis=0)  # Mean over time
+                channel_rms_list.append(channel_rms)
+                condition_segment_means[condition].append(float(channel_rms.mean()))
+
+            if channel_rms_list:
+                avg_rms = np.mean(channel_rms_list, axis=0)
+                condition_rms[condition] = avg_rms
+                vmin = min(vmin, avg_rms.min())
+                vmax = max(vmax, avg_rms.max())
     
+    layout = get_svg_heatmap_layout()
     # Plot each condition
     for idx, condition in enumerate(CONDITIONS):
         if condition not in condition_rms:
@@ -158,33 +196,32 @@ def create_spatial_heatmap_single_subject(data_dict, analyzer, results_dir, obj_
         
         ax = axes[idx]
         channel_rms = condition_rms[condition]
-        
-        # Create 2D grid
-        grid_data = np.zeros((2, 16))
-        for row in range(2):
-            for col in range(16):
-                ch_idx = layout[row, col]
-                grid_data[row, col] = channel_rms[ch_idx]
-        
-        im = ax.imshow(grid_data, cmap='hot', aspect='auto', vmin=vmin, vmax=vmax,
-                      interpolation='bilinear')
+        sm = draw_svg_heatmap(
+            ax,
+            channel_rms,
+            layout=layout,
+            vmin=vmin,
+            vmax=vmax,
+            cmap='magma'
+        )
         ax.set_title(f'{condition} - Mean RMS: {channel_rms.mean():.1f} a.u.',
                     fontsize=14, fontweight='bold')
-        ax.set_ylabel('Row', fontsize=12)
-        ax.set_yticks([0, 1])
-        ax.set_yticklabels(['Top', 'Bottom'])
-        ax.set_xticks(np.arange(0, 16, 2))
-        ax.set_xlabel('Column', fontsize=12)
-        
-        # Add channel numbers
-        for row in range(2):
-            for col in range(16):
-                ch_idx = layout[row, col]
-                ax.text(col, row, f'{ch_idx}', ha='center', va='center',
-                       fontsize=7, color='white', fontweight='bold')
-    
+
     # Shared colorbar
-    fig.colorbar(im, ax=axes, label='RMS Amplitude (a.u.)', shrink=0.8, pad=0.02)
+    fig.colorbar(sm, ax=axes, label='RMS Amplitude (a.u.)', shrink=0.8, pad=0.02)
+    stats_conditions, summary_stats, comparisons = summarize_condition_values(condition_segment_means)
+    stats_text = format_stats_text(stats_conditions, summary_stats, comparisons)
+    if stats_text:
+        fig.text(
+            0.01,
+            0.01,
+            stats_text,
+            ha='left',
+            va='bottom',
+            fontsize=9,
+            family='monospace',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+        )
     
     plt.tight_layout()
     save_path = results_dir / f'figureC_spatial_object_{obj_id}.svg'
@@ -281,6 +318,7 @@ def create_pca_per_object(data_dict, analyzer, results_dir):
             ax.set_title(f'PC{pc_idx+1} ({pca.explained_variance_ratio_[pc_idx]*100:.1f}%)',
                         fontsize=13, fontweight='bold')
             ax.grid(True, alpha=0.3, axis='y')
+            ax.set_ylim(bottom=0)
         
         # Add summary statistics (mean magnitudes only, no hypothesis testing)
         if 'Active glove' in condition_arrays:
@@ -306,6 +344,7 @@ def create_duration_stats(data_dict, results_dir):
     
     # Collect durations
     duration_data = defaultdict(lambda: defaultdict(list))
+    duration_summary = defaultdict(list)
     
     for condition in CONDITIONS:
         if condition not in data_dict:
@@ -316,6 +355,7 @@ def create_duration_stats(data_dict, results_dir):
             for record in data_dict[condition][obj_id]:
                 duration = record.end_time - record.start_time
                 duration_data[obj_id][condition].append(duration)
+                duration_summary[condition].append(duration)
     
     # Create figure
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
@@ -370,9 +410,23 @@ def create_duration_stats(data_dict, results_dir):
         ax.set_ylabel('Duration (s)', fontsize=11, fontweight='bold')
         ax.set_title(f'Object {obj_id}', fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(bottom=0)
     
     fig.suptitle('Task Duration Comparison with Statistical Tests', fontsize=16, fontweight='bold')
-    plt.tight_layout()
+    summary_conditions, summary_stats, summary_comparisons = summarize_condition_values(duration_summary)
+    stats_text = format_stats_text(summary_conditions, summary_stats, summary_comparisons)
+    if stats_text:
+        fig.text(
+            0.5,
+            0.01,
+            stats_text,
+            ha='center',
+            va='bottom',
+            fontsize=9,
+            family='monospace',
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.9)
+        )
+    plt.tight_layout(rect=(0, 0.05, 1, 1))
     
     save_path = results_dir / 'figure_duration_stats.svg'
     plt.savefig(save_path, format='svg', bbox_inches='tight')
