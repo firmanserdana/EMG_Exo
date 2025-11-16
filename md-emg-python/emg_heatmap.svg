@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="700pt" height="500pt" viewBox="0 0 700 500">
+  <metadata>
+    <emg-mapping>
+      <!-- Upper band: 3 rows x 6 channels -->
+      <!-- Total channels: 18 (indices 0-17) -->
+      <band id="upper">
+        <!-- Row 0: channels 0-5, starting at column 0 (no offset) -->
+        <row id="0" channels="6" start_x="50" start_y="50" spacing_x="60" spacing_y="0" />
+        
+        <!-- Row 1: channels 6-11, starting at column 1 (OFFSET by 30) -->
+        <row id="1" channels="6" start_x="80" start_y="120" spacing_x="60" spacing_y="0" />
+        
+        <!-- Row 2: channels 12-17, starting at column 0 (no offset) -->
+        <row id="2" channels="6" start_x="50" start_y="190" spacing_x="60" spacing_y="0" />
+      </band>
+      
+      <!-- Lower band: 2 rows x 7 channels -->
+      <!-- Total channels: 14 (indices 18-31) -->
+      <band id="lower">
+        <!-- Row 3: channels 18-24, starting with OFFSET (adjacent) -->
+        <row id="3" channels="7" start_x="80" start_y="280" spacing_x="60" spacing_y="0" />
+        
+        <!-- Row 4: channels 25-31, no offset -->
+        <row id="4" channels="7" start_x="50" start_y="350" spacing_x="60" spacing_y="0" />
+      </band>
+    </emg-mapping>
+  </metadata>
+  
+  <!-- Visual representation of electrodes (circles) -->
+  <g id="electrodes">
+    <!-- Upper band electrodes -->
+    <!-- Row 0 -->
+    <circle cx="50" cy="50" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="110" cy="50" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="170" cy="50" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="230" cy="50" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="290" cy="50" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="350" cy="50" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    
+    <!-- Row 1 (offset) -->
+    <circle cx="80" cy="120" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="140" cy="120" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="200" cy="120" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="260" cy="120" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="320" cy="120" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="380" cy="120" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    
+    <!-- Row 2 -->
+    <circle cx="50" cy="190" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="110" cy="190" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="170" cy="190" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="230" cy="190" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="290" cy="190" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    <circle cx="350" cy="190" r="24" fill="#e0e0e0" stroke="#333" stroke-width="2"/>
+    
+    <!-- Lower band electrodes -->
+    <!-- Row 3 (offset) -->
+    <circle cx="80" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    <circle cx="140" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    <circle cx="200" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    <circle cx="260" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    <circle cx="320" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    <circle cx="380" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    <circle cx="440" cy="280" r="24" fill="#c0c0c0" stroke="#333" stroke-width="2"/>
+    
+    <!-- Row 4 -->
+    <circle cx="50" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="110" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="170" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="230" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="290" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="350" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+    <circle cx="410" cy="350" r="24" fill="#d0d0d0" stroke="#333" stroke-width="2"/>
+  </g>
+</svg>
