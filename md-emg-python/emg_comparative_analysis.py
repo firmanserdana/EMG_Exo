@@ -2619,7 +2619,7 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
 
     if not data_dir.exists():
         print(f"Data directory not found: {data_dir}")
-        return None, None
+        return None, None, None
 
     loader = EMGDataLoader(data_dir)
     data_dict: Dict[str, Dict[int, List[SegmentRecord]]] = {}
@@ -2628,7 +2628,7 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
     subject_dirs = sorted([d for d in data_dir.iterdir() if d.is_dir()])
     if not subject_dirs:
         print(f"No subject subdirectories found in {data_dir}")
-        return None, None
+        return None, None, None
 
     skipped_count = 0
     loaded_count = 0
