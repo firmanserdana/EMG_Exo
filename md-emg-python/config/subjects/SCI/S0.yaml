@@ -5,8 +5,11 @@ task_open_close:
   sessions_open_loop: # valid sessions numbers in open-loop modality
     - 0
     - 1
+    - 2
     - 6
     - 8
+    - 12
+    - 14
   sessions_closed_loop: [] # valid sessions numbers in closed-loop modality
   invalid_sessions: [] # sessions to be ignored for data corruption or other reasons
   model_type: "LSTM"
