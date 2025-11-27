@@ -21,7 +21,7 @@ from matplotlib.patches import Circle
 from pathlib import Path
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Optional, Set, Iterable
+from typing import Any, Dict, List, Tuple, Optional, Set, Iterable
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -286,9 +286,28 @@ def _parse_svg_layout(svg_path: Path) -> SvgHeatmapLayout:
     metadata = root.find('.//{*}metadata')
     mapping = metadata.find('.//{*}emg-mapping') if metadata is not None else None
 
-    nodes: List[ChannelNode] = []
+    nodes_by_index: Dict[int, ChannelNode] = {}
     rows: List[List[int]] = []
-    channel_idx = 0
+    sequential_idx = 0
+
+    def _parse_channel_ids(attr: Optional[str]) -> List[int]:
+        if not attr:
+            return []
+
+        tokens = re.split(r'[\s,]+', attr.strip())
+        channel_ids: List[int] = []
+        for token in tokens:
+            if not token:
+                continue
+            try:
+                value = int(token)
+            except ValueError:
+                raise ValueError(f"Invalid channel id '{token}' in SVG layout") from None
+
+            # Accept 1-indexed IDs (default) but allow 0-indexed if explicitly provided
+            channel_ids.append(value - 1 if value > 0 else value)
+
+        return channel_ids
 
     if mapping is not None:
         for band in mapping.findall('.//{*}band'):
@@ -301,27 +320,53 @@ def _parse_svg_layout(svg_path: Path) -> SvgHeatmapLayout:
                 spacing_x = _parse_float(row.get('spacing_x'))
                 spacing_y = _parse_float(row.get('spacing_y'))
 
+                explicit_ids = _parse_channel_ids(row.get('channel_ids'))
+
+                if explicit_ids and channels_count and channels_count != len(explicit_ids):
+                    raise ValueError(
+                        f"Row {row_id} in band {band_id} declared {channels_count} channels but provided "
+                        f"{len(explicit_ids)} channel_ids"
+                    )
+
+                # Use explicit mapping when provided, otherwise fall back to sequential indices
+                channel_sequence = explicit_ids or list(range(sequential_idx, sequential_idx + channels_count))
+                if not explicit_ids:
+                    sequential_idx += channels_count
+
                 row_indices: List[int] = []
-                for offset in range(channels_count):
+                for offset, channel_idx in enumerate(channel_sequence):
                     x = start_x + offset * spacing_x
                     y = start_y + offset * spacing_y
-                    nodes.append(
-                        ChannelNode(
-                            index=channel_idx,
-                            x=x,
-                            y=y,
-                            band=band_id,
-                            row=f"{band_id}_{row_id}"
-                        )
+                    if channel_idx in nodes_by_index:
+                        raise ValueError(f"Duplicate channel index {channel_idx + 1} declared in SVG layout")
+
+                    nodes_by_index[channel_idx] = ChannelNode(
+                        index=channel_idx,
+                        x=x,
+                        y=y,
+                        band=band_id,
+                        row=f"{band_id}_{row_id}"
                     )
                     row_indices.append(channel_idx)
-                    channel_idx += 1
                 rows.append(row_indices)
 
-    if not nodes:
+    if not nodes_by_index:
         raise ValueError('SVG layout did not define any electrode nodes.')
 
-    return SvgHeatmapLayout(nodes=nodes, rows=rows, width=width, height=height, radius=default_radius * 0.8)
+    max_idx = max(nodes_by_index)
+    nodes_ordered: List[Optional[ChannelNode]] = [None] * (max_idx + 1)
+    for idx, node in nodes_by_index.items():
+        nodes_ordered[idx] = node
+
+    missing_indices = [idx for idx, node in enumerate(nodes_ordered) if node is None]
+    if missing_indices:
+        raise ValueError(
+            f"SVG layout is missing coordinates for channels: {', '.join(str(i + 1) for i in missing_indices)}"
+        )
+
+    final_nodes = [node for node in nodes_ordered if node is not None]
+
+    return SvgHeatmapLayout(nodes=final_nodes, rows=rows, width=width, height=height, radius=default_radius * 0.8)
 
 
 def get_svg_heatmap_layout() -> SvgHeatmapLayout:
@@ -1518,11 +1563,11 @@ class EMGAnalyzer:
             violin_data.append(condition_data[condition].flatten())
             violin_labels.append(condition)
         
-        parts = ax_violin.violinplot(violin_data, positions=range(len(valid_conditions)),
+        parts = ax_violin.violinplot(violin_data, positions=range(len(plot_conditions)),
                                      showmeans=True, showmedians=True, widths=0.7)
         
         # Color the violin plots
-        for idx, (pc, condition) in enumerate(zip(parts['bodies'], valid_conditions)):
+        for idx, (pc, condition) in enumerate(zip(parts['bodies'], plot_conditions)):
             color = MATLAB_CONDITION_BASE_COLORS.get(condition, CONDITION_COLORS.get(condition, '#1f77b4'))
             pc.set_facecolor(color)
             pc.set_alpha(0.7)
@@ -1553,7 +1598,7 @@ class EMGAnalyzer:
         ax_overlay = fig.add_subplot(gs[2, 2])
         
         # Find max length for proper x-axis and pad shorter signals
-        max_len = max(condition_data[c].shape[0] for c in valid_conditions)
+        max_len = max(condition_data[c].shape[0] for c in plot_conditions)
         
         for condition in plot_conditions:
             data = condition_data[condition]
@@ -2622,6 +2667,7 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
         return None, None, None
 
     loader = EMGDataLoader(data_dir)
+    manual_timestamp_overrides: Dict[Tuple[str, int], Dict[str, Any]] = {}
     data_dict: Dict[str, Dict[int, List[SegmentRecord]]] = {}
     fs_estimates: List[float] = []
 
@@ -2662,36 +2708,64 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
                         'session_info': {
                             'session_number': 8,
                             'total_elapsed_time': 90.0,
-                            'condition': 'active'
+                            'condition': 'active',
+                            'session_file': session_08_path.name,
+                            'total_gestures': len(manual_times)
                         }
                     }
                     # Save it so we can process it normally
-                    with open(ts_08_path, 'w') as f:
-                        json.dump(manual_timestamps, f, indent=2)
-                    print(f"  Created {ts_08_path.name} with 12 gesture timestamps from notes.txt log")
+                    try:
+                        with open(ts_08_path, 'w') as f:
+                            json.dump(manual_timestamps, f, indent=2)
+                    except PermissionError:
+                        manual_timestamp_overrides[(subject_id, 8)] = manual_timestamps
+                        print(f"  Unable to write {ts_08_path.name} (read-only data); will inject manual timestamps in-memory")
+                    else:
+                        print(f"  Created {ts_08_path.name} with 12 gesture timestamps from notes.txt log")
         
         timestamp_files = sorted(logs_dir.glob('*_timestamps.json'))
-        if not timestamp_files:
+        subject_overrides = [
+            (session_idx, data)
+            for (subj, session_idx), data in manual_timestamp_overrides.items()
+            if subj == subject_id
+        ]
+
+        if not timestamp_files and not subject_overrides:
             print(f"  No timestamp files found in {logs_dir}")
             continue
 
-        for ts_file in timestamp_files:
-            timestamps = loader.load_timestamps(ts_file)
+        entries: List[Tuple[Optional[Path], Optional[Tuple[int, Dict[str, Any]]]]] = [
+            (ts_file, None) for ts_file in timestamp_files
+        ]
+        entries.extend((None, override) for override in subject_overrides)
+
+        for ts_path, override in entries:
+            if ts_path is not None:
+                timestamps = loader.load_timestamps(ts_path)
+                ts_display_name = ts_path.name
+                override_session = None
+            else:
+                override_session, timestamps = override if override else (None, None)
+                ts_display_name = f"{subject_id}_session_{override_session:02d}_manual" if override_session is not None else f"{subject_id}_manual"
+
             if not timestamps:
-                print(f"  Skipping {ts_file.name}: could not parse timestamps")
+                print(f"  Skipping {ts_display_name}: could not parse timestamps")
                 skipped_count += 1
                 continue
-            
+
             session_info = timestamps.get('session_info', {})
             session_num = session_info.get('session_number')
-            
-            # If session number not in JSON, extract from filename
+
+            # If session number not in JSON, extract from filename or override hint
             if session_num is None:
-                match = re.search(r'session_(\d+)', ts_file.name)
-                if match:
-                    session_num = int(match.group(1))
-                else:
-                    print(f"  Skipping {ts_file.name}: cannot determine session number")
+                if override_session is not None:
+                    session_num = override_session
+                elif ts_path is not None:
+                    match = re.search(r'session_(\d+)', ts_path.name)
+                    if match:
+                        session_num = int(match.group(1))
+                if session_num is None:
+                    print(f"  Skipping {ts_display_name}: cannot determine session number")
                     skipped_count += 1
                     continue
             
@@ -2719,12 +2793,18 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
             if session_file:
                 candidates.append(data_dir / session_file)
 
-            base_name = ts_file.stem.replace('_timestamps', '')
-            candidates.append(ts_file.with_name(f"{base_name}.npy"))
+            if ts_path is not None:
+                base_name = ts_path.stem.replace('_timestamps', '')
+                parent_dir = ts_path.parent
+            else:
+                base_name = f"session_{session_num:02d}"
+                parent_dir = logs_dir
+
+            candidates.append(parent_dir / f"{base_name}.npy")
 
             if 'session_' in base_name:
                 suffix = base_name.split('session_')[-1]
-                candidates.append(ts_file.parent / f"session_{suffix}.npy")
+                candidates.append(parent_dir / f"session_{suffix}.npy")
 
             seen: Set[Path] = set()
             unique_candidates = []
@@ -2735,7 +2815,7 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
 
             session_path = next((path for path in unique_candidates if path.exists()), None)
             if not session_path:
-                print(f"  Warning: session file not found for {ts_file.name}")
+                print(f"  Warning: session file not found for {ts_display_name}")
                 continue
 
             try:
