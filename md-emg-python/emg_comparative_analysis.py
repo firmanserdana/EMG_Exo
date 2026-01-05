@@ -500,10 +500,13 @@ class EMGDataLoader:
         self.data_dir = Path(data_dir)
         
     def load_session(self, session_file: Path) -> np.ndarray:
-        """Load EMG data from .npy file and extract channels 0-31
+        """Load EMG data from .npy file including timestamp column if present.
         
         Note: The .npy files contain multiple arrays that need to be concatenated.
         Each array is a buffer from the streaming acquisition.
+        
+        Returns array with shape (samples, 33) where column 32 is the timestamp column
+        if present in the original data.
         """
         arrays = []
         with open(session_file, 'rb') as f:
@@ -516,11 +519,8 @@ class EMGDataLoader:
         # Concatenate all buffers into single array (time x channels)
         data = np.concatenate(arrays, axis=0)
         
-        # If data has more than NUM_CHANNELS columns, assume last column is timestamp
-        if data.shape[1] > NUM_CHANNELS:
-            # Take only first NUM_CHANNELS channels
-            data = data[:, :NUM_CHANNELS]
-        
+        # Keep all columns including timestamp column (column 32) for time-based segmentation
+        # The timestamp column is needed by segment_by_gesture for proper alignment
         return data
     
     def load_timestamps(self, timestamps_file: Path) -> Dict:
@@ -657,10 +657,40 @@ class EMGDataLoader:
                     # Column 32 is the timestamp column
                     data_timestamps = emg_data[:, NUM_CHANNELS]
                     data_start_time = data_timestamps[0]
+                    data_end_time = data_timestamps[-1]
+                    recording_duration = data_end_time - data_start_time
+                    
+                    # Check if timestamps exceed recording duration significantly
+                    # This indicates timestamps are from a different time source (e.g., stopwatch)
+                    max_timestamp = float(sorted_events[-1].get('timestamp', 0.0))
+                    if max_timestamp > recording_duration * 2:
+                        # Timestamps don't match recording - use equal division fallback
+                        # Divide recording evenly into 6 objects
+                        num_samples = emg_data.shape[0]
+                        samples_per_object = num_samples // 6
+                        
+                        if gesture_id < 6 and samples_per_object > 10:
+                            start_sample = gesture_id * samples_per_object
+                            end_sample = min((gesture_id + 1) * samples_per_object, num_samples)
+                            
+                            segment = emg_data[start_sample:end_sample, :NUM_CHANNELS].copy()
+                            segments.append(
+                                SegmentRecord(
+                                    samples=segment,
+                                    subject=(subject_id or 'UNKNOWN').upper(),
+                                    session=session_name or '',
+                                    start_time=start_sample / fs,
+                                    end_time=end_sample / fs
+                                )
+                            )
+                        return segments
                     
                     # Convert relative gesture times to absolute
                     abs_start_time = data_start_time + start_time
                     abs_end_time = data_start_time + end_time
+                    
+                    # Clamp to recording bounds
+                    abs_end_time = min(abs_end_time, data_end_time)
                     
                     # Find samples within this time range
                     mask = (data_timestamps >= abs_start_time) & (data_timestamps <= abs_end_time)
@@ -903,10 +933,13 @@ class EMGAnalyzer:
     def _aggregate_condition_envelope(
         self,
         records: List[SegmentRecord],
-        target_len: int = 200,
+        target_len: int = 1000,
         window_ms: int = 50
     ) -> Optional[np.ndarray]:
-        """Average RMS envelope across segments, resampled to a fixed length."""
+        """Average RMS envelope across segments, resampled to a fixed length.
+        
+        Note: target_len default increased from 200 to 1000 for better temporal resolution.
+        """
 
         if not records:
             return None
@@ -995,9 +1028,12 @@ class EMGAnalyzer:
         data_dict: Dict[str, Dict[int, List[SegmentRecord]]],
         object_id: int = 0,
         save_prefix: str = 'figureA_overlay',
-        target_len: int = 200
+        target_len: int = 1000
     ) -> Optional[plt.Figure]:
-        """Overlay averaged RMS envelopes per condition for each channel."""
+        """Overlay averaged RMS envelopes per condition for each channel.
+        
+        Note: target_len default increased from 200 to 1000 for better temporal resolution.
+        """
 
         grouped = self._collect_segments_by_condition(data_dict, object_id)
         if not grouped:
@@ -1203,7 +1239,19 @@ class EMGAnalyzer:
         return stats_df
 
     def _segment_duration(self, record: SegmentRecord) -> float:
-        return max(record.end_time - record.start_time, record.samples.shape[0] / max(self.fs_hz, 1e-9))
+        """Robust duration: prefer actual sample length when timestamps disagree."""
+        sample_dur = record.samples.shape[0] / max(self.fs_hz, 1e-9)
+        ts_dur = record.end_time - record.start_time
+
+        if ts_dur <= 0:
+            return sample_dur
+
+        # If timestamps overshoot by 50%+ (likely mislabeled), trust sample length
+        if ts_dur > sample_dur * 1.5:
+            return sample_dur
+
+        # Otherwise trust timestamps (slightly shorter/longer allowed)
+        return ts_dur
         
     def compute_rms(self, data: np.ndarray, window_ms: int = 100) -> np.ndarray:
         """Compute RMS envelope with sliding window"""
@@ -1470,6 +1518,8 @@ class EMGAnalyzer:
         """
         condition_data: Dict[str, np.ndarray] = {}
         condition_segment_means: Dict[str, List[float]] = defaultdict(list)
+        condition_trial_counts: Dict[str, int] = {}
+        condition_durations: Dict[str, List[float]] = {}
         
         # Collect and prepare data
         for condition in CONDITIONS:
@@ -1478,20 +1528,27 @@ class EMGAnalyzer:
             records = data_dict[condition][object_id]
             if not records:
                 continue
+            condition_trial_counts[condition] = len(records)
             
             # Average all segments for this condition
             all_segments = []
+            durations = []
             for record in records:
                 segment = self._normalize_segment(record.samples, record.subject)
                 rms = self.compute_rms(segment, window_ms=100)
                 all_segments.append(rms)
                 condition_segment_means[condition].append(float(np.mean(rms)))
+                durations.append(record.end_time - record.start_time)
             
-            # Find common length and average
-            min_len = min(seg.shape[0] for seg in all_segments)
-            trimmed = [seg[:min_len, :] for seg in all_segments]
-            avg_rms = np.mean(trimmed, axis=0)
+            # Resample each segment to the longest available so we keep full coverage
+            target_len_cond = max(seg.shape[0] for seg in all_segments)
+            resampled_segments = [
+                self._resample_to_length(seg, target_len_cond) if seg.shape[0] != target_len_cond else seg
+                for seg in all_segments
+            ]
+            avg_rms = np.mean(resampled_segments, axis=0)
             condition_data[condition] = avg_rms
+            condition_durations[condition] = durations
         
         if not condition_data:
             print(f"No valid data for object {object_id}")
@@ -1597,31 +1654,40 @@ class EMGAnalyzer:
         # Time-series overlay of mean across all channels
         ax_overlay = fig.add_subplot(gs[2, 2])
         
-        # Find max length for proper x-axis and pad shorter signals
-        max_len = max(condition_data[c].shape[0] for c in plot_conditions)
+        # Use full temporal resolution - resample to longest condition length to preserve duration context
+        lengths = [condition_data[c].shape[0] for c in plot_conditions]
+        target_temporal_len = max(lengths)
+        mean_durations = {c: np.mean(condition_durations.get(c, [])) for c in plot_conditions if condition_durations.get(c)}
+        max_duration = max(mean_durations.values()) if mean_durations else target_temporal_len / (self.fs_hz or 1000.0)
+        time = np.linspace(0.0, max_duration, target_temporal_len)
         
         for condition in plot_conditions:
             data = condition_data[condition]
-            mean_over_channels = data.mean(axis=1)
+            original_len = data.shape[0]
+            trial_count = condition_trial_counts.get(condition, 0)
             
-            # Pad with last value if shorter than max
-            if len(mean_over_channels) < max_len:
-                pad_length = max_len - len(mean_over_channels)
-                mean_over_channels = np.pad(mean_over_channels, (0, pad_length), 
-                                           mode='edge')  # Repeat last value
-            
-            time = np.arange(len(mean_over_channels))
+            # Resample to common length if needed
+            if data.shape[0] != target_temporal_len:
+                resampled_data = self._resample_to_length(data, target_temporal_len)
+            else:
+                resampled_data = data
+            mean_over_channels = resampled_data.mean(axis=1)
             color = MATLAB_CONDITION_BASE_COLORS.get(condition, CONDITION_COLORS.get(condition, '#1f77b4'))
-            ax_overlay.plot(time, mean_over_channels, label=f'{condition} ({data.shape[0]} samples)', 
+            ax_overlay.plot(time, mean_over_channels, label=f'{condition} (n={trial_count})', 
                           linewidth=2.5, alpha=0.8, color=color)
         
-        ax_overlay.set_xlabel('Time (samples)', fontsize=11, fontweight='bold')
+        ax_overlay.set_xlabel('Time (s)', fontsize=11, fontweight='bold')
         ax_overlay.set_ylabel('Mean RMS (all channels)', fontsize=11, fontweight='bold')
-        ax_overlay.set_title('Temporal Comparison (padded to same length)', fontsize=13, fontweight='bold')
+        ax_overlay.set_title(f'Temporal Comparison ({target_temporal_len} samples)', fontsize=13, fontweight='bold')
         ax_overlay.legend(fontsize=9)
         ax_overlay.grid(True, alpha=0.3)
-        ax_overlay.set_xlim(0, max_len)  # Set proper x-axis limit
-        ax_overlay.set_ylim(bottom=0)
+        ax_overlay.set_xlim(0, max_duration)
+        # Set y-axis to scale with highest value
+        if condition_data:
+            overlay_max = max(data.mean(axis=1).max() for data in condition_data.values())
+            ax_overlay.set_ylim(0, overlay_max * 1.1 if overlay_max > 0 else 1)
+        else:
+            ax_overlay.set_ylim(bottom=0)
         
         # Overall figure title
         fig.suptitle(f'Comprehensive EMG Comparison Across Conditions - Object {object_id}', 
@@ -1724,7 +1790,12 @@ class EMGAnalyzer:
         ax1.set_title('Overall Amplitude Distribution', fontsize=14, fontweight='bold')
         ax1.grid(True, alpha=0.3, axis='y')
         ax1.legend(fontsize=10)
-        ax1.set_ylim(bottom=0)
+        # Set y-axis to follow highest value
+        if box_data:
+            box_max = max(np.percentile(d, 99) for d in box_data)  # Use 99th percentile for box plot
+            ax1.set_ylim(0, box_max * 1.15 if box_max > 0 else 1)
+        else:
+            ax1.set_ylim(bottom=0)
         
         # Add mean values as text
         for idx, condition in enumerate(labels):
@@ -2398,7 +2469,9 @@ class EMGAnalyzer:
                         'Condition': condition,
                         'Object': obj_id,
                         'Segment': seg_idx,
-                        'Duration (s)': duration_sec
+                        'Duration (s)': duration_sec,
+                        'Subject': record.subject,
+                        'Session': record.session
                     })
         
         df = pd.DataFrame(results)
@@ -2412,10 +2485,14 @@ class EMGAnalyzer:
             print("\n=== Time Consumption Analysis ===")
             print(summary.to_string())
             
-            # Save to CSV
+            # Save to CSV (summary and raw)
             save_path = self.results_dir / 'time_consumption_analysis.csv'
             summary.to_csv(save_path, index=False)
             print(f"\nSaved: {save_path}")
+
+            raw_path = self.results_dir / 'time_consumption_durations.csv'
+            df.to_csv(raw_path, index=False)
+            print(f"Saved raw durations: {raw_path}")
             
             # Create visualization
             self._plot_time_consumption(df)
@@ -2450,6 +2527,144 @@ class EMGAnalyzer:
         
         save_path = self.results_dir / 'time_consumption_comparison.svg'
         plt.savefig(save_path, bbox_inches='tight', format='svg')
+        print(f"Saved: {save_path}")
+        plt.close()
+
+    def analyze_mvc_by_object(self, data_dict: Dict[str, Dict[int, List[SegmentRecord]]],
+                              object_ids: List[int] = None) -> pd.DataFrame:
+        """
+        Analyze %MVC across all objects and conditions.
+        Creates a bar chart similar to time consumption figure.
+        
+        For each object (0-5), shows 3 bars: No glove, Passive glove, Active glove
+        """
+        if object_ids is None:
+            object_ids = list(range(NUM_GESTURES))
+        
+        results = []
+        
+        # Fixed order: No glove, Passive glove, Active glove
+        condition_order = ['No glove', 'Passive glove', 'Active glove']
+        
+        for condition in condition_order:
+            if condition not in data_dict:
+                continue
+            
+            for obj_id in object_ids:
+                if obj_id not in data_dict[condition]:
+                    continue
+                
+                records = data_dict[condition][obj_id]
+                
+                for seg_idx, record in enumerate(records):
+                    # Get normalized (MVC) segment and compute mean RMS
+                    segment = self._normalize_segment(record.samples, record.subject)
+                    rms = self.compute_rms(segment, window_ms=100)
+                    mean_mvc = float(np.mean(rms))
+                    
+                    results.append({
+                        'Condition': condition,
+                        'Object': obj_id,
+                        'Segment': seg_idx,
+                        'Subject': record.subject,
+                        '%MVC': mean_mvc
+                    })
+        
+        df = pd.DataFrame(results)
+        
+        if len(df) > 0:
+            # Create summary statistics
+            summary = df.groupby(['Condition', 'Object'])['%MVC'].agg([
+                'count', 'mean', 'std', 'min', 'max'
+            ]).reset_index()
+            
+            print("\n=== %MVC Analysis by Object ===")
+            print(summary.to_string())
+            
+            # Save to CSV
+            save_path = self.results_dir / 'mvc_by_object_analysis.csv'
+            summary.to_csv(save_path, index=False)
+            print(f"\nSaved: {save_path}")
+            
+            # Create visualization
+            self._plot_mvc_by_object(df, condition_order)
+        
+        return df
+    
+    def _plot_mvc_by_object(self, df: pd.DataFrame, condition_order: List[str]):
+        """Plot %MVC comparison by object with grouped bars"""
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+        
+        # Define colors for conditions
+        colors = {
+            'No glove': '#1f77b4',      # Blue
+            'Passive glove': '#ff7f0e',  # Orange
+            'Active glove': '#2ca02c'    # Green
+        }
+        
+        # Left plot: Grouped bar chart by object
+        ax = axes[0]
+        
+        # Calculate mean %MVC per condition per object
+        summary = df.groupby(['Object', 'Condition'])['%MVC'].agg(['mean', 'std']).reset_index()
+        
+        objects = sorted(df['Object'].unique())
+        x = np.arange(len(objects))
+        width = 0.25
+        
+        for i, condition in enumerate(condition_order):
+            cond_data = summary[summary['Condition'] == condition]
+            means = []
+            stds = []
+            for obj in objects:
+                obj_data = cond_data[cond_data['Object'] == obj]
+                if len(obj_data) > 0:
+                    means.append(obj_data['mean'].values[0])
+                    stds.append(obj_data['std'].values[0])
+                else:
+                    means.append(0)
+                    stds.append(0)
+            
+            offset = (i - 1) * width
+            bars = ax.bar(x + offset, means, width, yerr=stds, 
+                         label=condition, color=colors.get(condition, '#333'),
+                         capsize=3, alpha=0.85, edgecolor='black', linewidth=0.5)
+        
+        ax.set_xlabel('Object', fontsize=13, fontweight='bold')
+        ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
+        ax.set_title('%MVC by Object and Condition', fontsize=15, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'Object {i}' for i in objects], fontsize=11)
+        ax.legend(fontsize=11, loc='upper right')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(bottom=0)
+        
+        # Right plot: Overall comparison (box plot)
+        ax = axes[1]
+        df_plot = df.copy()
+        df_plot['Condition'] = pd.Categorical(df_plot['Condition'], categories=condition_order, ordered=True)
+        df_plot = df_plot.sort_values('Condition')
+        
+        sns.boxplot(data=df_plot, x='Condition', y='%MVC', 
+                   order=condition_order, palette=colors, ax=ax)
+        ax.set_title('Overall %MVC by Condition', fontsize=15, fontweight='bold')
+        ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
+        ax.set_xlabel('Condition', fontsize=13, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(bottom=0)
+        
+        # Add mean values as text
+        for i, cond in enumerate(condition_order):
+            cond_data = df_plot[df_plot['Condition'] == cond]['%MVC']
+            if len(cond_data) > 0:
+                mean_val = cond_data.mean()
+                ax.text(i, mean_val + 1, f'μ={mean_val:.1f}', ha='center', 
+                       fontsize=10, fontweight='bold')
+        
+        plt.tight_layout()
+        
+        save_path = self.results_dir / 'mvc_by_object_comparison.svg'
+        plt.savefig(save_path, bbox_inches='tight', format='svg', dpi=150)
         print(f"Saved: {save_path}")
         plt.close()
 
@@ -2621,7 +2836,7 @@ def load_mvc_references(data_dir: Path, subjects: List[str]) -> Dict[str, np.nda
 
 
 def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[SegmentRecord]]]], Optional[float], Optional[Dict[str, np.ndarray]]]:
-    """Load EMG data from S1, S2, S5-S10 (excluding S0, S3, S4).
+    """Load EMG data from S1-S10 (exclude only S0 system test).
     Uses notes.txt for conditions and handles special cases.
     
     Returns:
@@ -2630,15 +2845,16 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
         mvc_dict: {subject_id: mvc_rms_per_channel} for MVC normalization
     """
 
-    # Skip S0 (system test), S3 (only 5 sessions), S4 (only 8 sessions, irregular conditions)
-    # Include: S1, S2, S5-S10 (all with 9 sessions, 3 per condition)
-    SKIP_SUBJECTS = {'S0', 'S3', 'S4'}
+    # Skip only S0 (system test); include S1-S10 with session-level skips below
+    SKIP_SUBJECTS = {'S0'}
     SKIP_SESSIONS = {
-        'S1': {0, 1, 2},  # bad (0), mvc (1), bad (2)
-        'S2': {0},  # mvc
-        'S3': {0, 1},  # mvc, bad
-        'S4': {0, 4},  # mvc, fall
-        'S5': {0},  # mvc
+        # Include S1-S5 sessions 1-9 as requested; keep only mvc (0) skips
+        'S1': {0},
+        'S2': {0},
+        'S3': {0},
+        'S4': {0},
+        'S5': {0},
+        # Downstream subjects unchanged
         'S6': {0, 10},  # rearranged, mvc
         'S7': {0, 1, 2, 3, 8},  # mvc, disconnected (1-3), bad (8) - sessions 4-7, 9-13 available
         'S8': {0, 5},  # mvc, skip session 5 (sessions 1-4, 6-10 = 9 sessions)
@@ -2648,13 +2864,15 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
     
     # Fallback conditions from notes.txt for sessions missing metadata
     FALLBACK_CONDITIONS = {
-        'S1': {3: 'no', 4: 'no', 5: 'no', 6: 'passive', 7: 'passive', 8: 'passive', 9: 'active', 10: 'active', 11: 'active'},  # 9 sessions: 3 per condition
+        # Updated mappings for S1-S5 (sessions 1-9) per notes and user request
+        'S1': {1: 'no', 2: 'no', 3: 'no', 4: 'passive', 5: 'passive', 6: 'passive', 7: 'active', 8: 'active', 9: 'active'},
         'S2': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'no', 5: 'no', 6: 'no', 7: 'active', 8: 'active', 9: 'active'},
-        'S3': {2: 'active', 3: 'active', 4: 'active', 5: 'no', 6: 'no', 7: 'no', 8: 'passive', 9: 'passive', 10: 'passive'},
-        'S4': {1: 'no', 2: 'no', 3: 'no', 5: 'redo', 6: 'active', 7: 'active', 8: 'active', 9: 'no extend', 10: 'passive', 11: 'passive', 12: 'passive'},
+        'S3': {1: 'active', 2: 'active', 3: 'active', 4: 'no', 5: 'no', 6: 'no', 7: 'passive', 8: 'passive', 9: 'passive'},
+        'S4': {1: 'no', 2: 'no', 3: 'no', 4: 'active', 5: 'active', 6: 'active', 7: 'passive', 8: 'passive', 9: 'passive'},
         'S5': {1: 'active', 2: 'active', 3: 'active', 4: 'passive', 5: 'passive', 6: 'passive', 7: 'no', 8: 'no', 9: 'no'},
+        # Remaining subjects unchanged
         'S6': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'active', 5: 'active', 6: 'active', 7: 'no', 8: 'no', 9: 'no'},
-        'S7': {4: 'no', 5: 'no', 6: 'no', 7: 'passive', 9: 'passive', 10: 'passive', 11: 'active', 12: 'active', 13: 'active'},  # 9 sessions: 3 no, 3 passive, 3 active
+        'S7': {4: 'no', 5: 'no', 6: 'no', 7: 'passive', 9: 'passive', 10: 'passive', 11: 'active', 12: 'active', 13: 'active'},
         'S8': {1: 'passive', 2: 'passive', 3: 'passive', 4: 'no', 6: 'no', 7: 'no', 8: 'active', 9: 'active', 10: 'active'},
         'S9': {2: 'passive', 3: 'passive', 4: 'passive', 5: 'no', 6: 'no', 7: 'no', 8: 'active', 10: 'active', 13: 'active'},
         'S10': {1: 'no', 2: 'no', 3: 'no', 4: 'active', 5: 'active', 7: 'active', 8: 'passive', 9: 'passive', 10: 'passive'},
@@ -2841,6 +3059,9 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
                 num_timestamps = len(gesture_entries)
                 num_objects = num_timestamps // 2  # Each object defined by 2 timestamps
                 
+                # Limit to maximum 6 objects per session (standard protocol)
+                num_objects = min(num_objects, 6)
+                
                 # Generate object IDs (0 to num_objects-1)
                 for obj_id in range(num_objects):
                     segments = loader.segment_by_gesture(
@@ -2892,7 +3113,7 @@ def load_real_data(data_dir: Path) -> Tuple[Optional[Dict[str, Dict[int, List[Se
     print(f"Data Loading Summary:")
     print(f"  Sessions loaded: {loaded_count}")
     print(f"  Sessions skipped: {skipped_count}")
-    print(f"  S0, S3, S4 excluded (S1, S2, S5-S10 included, balanced 3 sessions per condition)")
+    print(f"  Subjects included: S1-S10 (S0 excluded). Session-level skips still applied per notes.txt")
     print(f"  Note: S7 has 8 sessions (3 no, 2 passive, 3 active)")
     print(f"{'='*70}\n")
 
@@ -3045,12 +3266,13 @@ def main():
     except Exception as e:
         print(f"  Error generating PCA for all objects: {e}")
     
-    print(f"\nGenerating channel statistics for Object {primary_object}...")
-    try:
-        analyzer.channel_statistics_summary(data_dict, object_id=primary_object, save_prefix='figureD')
-        plt.close('all')
-    except Exception as e:
-        print(f"  Error generating channel statistics summary: {e}")
+    print(f"\nGenerating channel statistics for objects {object_ids}...")
+    for obj_id in object_ids:
+        try:
+            analyzer.channel_statistics_summary(data_dict, object_id=obj_id, save_prefix='figureD')
+            plt.close('all')
+        except Exception as e:
+            print(f"  Error generating channel statistics summary for object {obj_id}: {e}")
 
     # Spatial heatmaps per subject
     print("\n--- Spatial Heatmaps per Subject ---")
@@ -3067,6 +3289,13 @@ def main():
     except Exception as e:
         print(f"  Error in time consumption analysis: {e}")
     
+    # %MVC analysis by object
+    print("\n--- %MVC Analysis by Object ---")
+    try:
+        analyzer.analyze_mvc_by_object(data_dict, object_ids=object_ids)
+    except Exception as e:
+        print(f"  Error in %MVC analysis: {e}")
+    
     object_id_list_str = "_".join(str(obj) for obj in object_ids) if object_ids else ""
 
     print("\n" + "=" * 70)
@@ -3079,8 +3308,10 @@ def main():
     if object_ids:
         print(f"  - figureC_pca_single_objects_{primary_object}.svg (primary object)")
         print(f"  - figureC_pca_all_objects_{object_id_list_str}.svg (all analyzed objects)")
-    print("  - time_consumption_comparison.png")
+    print("  - time_consumption_comparison.svg")
     print("  - time_consumption_analysis.csv")
+    print("  - mvc_by_object_comparison.svg (%MVC by object with 3 condition bars)")
+    print("  - mvc_by_object_analysis.csv")
     print("  - figureD_channels_bar_object_{primary}.svg (channel RMS summary)".replace('{primary}', str(primary_object)))
     print("  - figureD_channels_diff_object_{primary}.svg (condition difference heatmap)".replace('{primary}', str(primary_object)))
     print("  - channel_rms_stats_object_{primary}.csv (exported RMS statistics)".replace('{primary}', str(primary_object)))

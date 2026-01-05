@@ -38,6 +38,14 @@ def create_rate_based_temporal_comparison():
     print("="*70)
     print("GENERATING RATE-BASED TEMPORAL COMPARISON")
     print("="*70)
+
+    def _resample_vector(vec: np.ndarray, target_len: int) -> np.ndarray:
+        """Linearly resample a 1D vector to a fixed length."""
+        if vec.shape[0] == target_len:
+            return vec
+        old_idx = np.linspace(0.0, 1.0, vec.shape[0])
+        new_idx = np.linspace(0.0, 1.0, target_len)
+        return np.interp(new_idx, old_idx, vec)
     
     # Generate for each object
     for obj_id in range(6):
@@ -50,6 +58,7 @@ def create_rate_based_temporal_comparison():
         valid_conditions = []
         condition_data = {}
         condition_durations = {}
+        condition_trial_counts = {}
         
         for condition in CONDITIONS:
             if condition not in data_dict or obj_id not in data_dict[condition]:
@@ -58,6 +67,7 @@ def create_rate_based_temporal_comparison():
             if not records:
                 continue
             valid_conditions.append(condition)
+            condition_trial_counts[condition] = len(records)
             
             # Process segments
             all_segments = []
@@ -75,10 +85,13 @@ def create_rate_based_temporal_comparison():
                 rate = mean_abs / duration
                 all_segments.append(rate)
             
-            # Truncate to shortest segment
-            min_len = min(seg.shape[0] for seg in all_segments)
-            trimmed = [seg[:min_len] for seg in all_segments]
-            avg = np.mean(trimmed, axis=0)
+            # Resample each segment to the longest available so we keep full coverage
+            target_len_cond = max(seg.shape[0] for seg in all_segments)
+            resampled_segments = [
+                _resample_vector(seg, target_len_cond) if seg.shape[0] != target_len_cond else seg
+                for seg in all_segments
+            ]
+            avg = np.mean(resampled_segments, axis=0)
             
             condition_data[condition] = avg
             condition_durations[condition] = all_durations
@@ -87,19 +100,23 @@ def create_rate_based_temporal_comparison():
             plt.close(fig)
             continue
         
-        # Find minimum length across all conditions
-        min_len = min(len(condition_data[c]) for c in valid_conditions)
+        # Resample all condition means to a shared length (longest), so time axis covers the full window
+        target_len = max(len(condition_data[c]) for c in valid_conditions)
         for condition in valid_conditions:
-            condition_data[condition] = condition_data[condition][:min_len]
+            data = condition_data[condition]
+            if len(data) != target_len:
+                condition_data[condition] = _resample_vector(data, target_len)
         
         # Plot temporal patterns (rate-based)
-        time_axis = np.arange(min_len) / 1000.0  # Convert to seconds
+        mean_durations = {c: np.mean(condition_durations[c]) for c in valid_conditions if condition_durations[c]}
+        max_duration = max(mean_durations.values()) if mean_durations else target_len / 1000.0
+        time_axis = np.linspace(0.0, max_duration, target_len)
         
         for condition in valid_conditions:
             data = condition_data[condition]
             color = CONDITION_COLORS[condition]
-            n_samples = len(data_dict[condition][obj_id])
-            ax1.plot(time_axis, data, label=f'{condition} (n={n_samples})',
+            n_trials = condition_trial_counts.get(condition, 0)
+            ax1.plot(time_axis, data, label=f'{condition} (n={n_trials})',
                    linewidth=2.5, alpha=0.85, color=color)
         
         ax1.set_xlabel('Time (s)', fontsize=13, fontweight='bold')
@@ -131,13 +148,14 @@ def create_rate_based_temporal_comparison():
         # Bottom plot: Average rate comparison with statistics
         ax2 = axes[1]
         
+        order = [c for c in ['No glove', 'Passive glove', 'Active glove'] if c in valid_conditions]
         positions = []
         labels = []
         means = []
         stds = []
         colors_list = []
-        
-        for pos, condition in enumerate(valid_conditions):
+
+        for pos, condition in enumerate(order):
             # Calculate mean rate for each trial
             records = data_dict[condition][obj_id]
             rates = []

@@ -1,9 +1,8 @@
 Subject 0
-0 = mvc*
-1-3 = with no glove
-4 = hand close and rest
-5-7 = with passive glove*
-7=disconnected devices
+0 = mvc
+1-3 = no gloves
+4-6 = passive gloves
+7-9 = active gloves
 8-10= with active glove*
 11-13 = with no gloves*
 13 = disconnected devices
@@ -28,18 +27,15 @@ subject 2
 
 subject 3
 0 = mvc
-1 = bad
-2-4 = active gloves
-5-7 = no gloves
-8-10 = passives gloves
+1-3 = active gloves
+4-6 = no gloves
+7-9 = passive gloves
 
 subject 4
 0 = mvc
 1-3 = no gloves
-4 = bad, fall
-5 = redo
-6-8 = active gloves
-9 = no extend
+4-6 = active gloves
+7-9 = passive gloves
 10-12 = passive glove
 
 subject 5
@@ -49,10 +45,10 @@ subject 5
 7-9 = no
 
 subject 6
-1-3 = glove passive
-4-6 = active glove
+0 = mvc
+1-3 = active gloves
+4-6 = passive gloves
 7-9 = no gloves
-10 = mvc
 
 subject 7
 0 = mvc

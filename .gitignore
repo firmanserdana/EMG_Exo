@@ -4,3 +4,4 @@ config.h
 .vscode/
 
 *.png
+*.PNG
