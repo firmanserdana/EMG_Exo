@@ -3,6 +3,8 @@ Generate statistical test summaries for all EMG analyses
 Saves results to markdown files with references to figure files
 """
 import numpy as np
+from collections import defaultdict
+import pandas as pd
 from pathlib import Path
 from scipy import stats
 from emg_comparative_analysis import load_real_data, EMGDataLoader, EMGAnalyzer
@@ -52,32 +54,50 @@ def test_hypothesis_comprehensive(active_values, other_values, other_name):
     # 2. Mann-Whitney U test (non-parametric, one-tailed)
     u_stat, p_mw_two = stats.mannwhitneyu(active_values, other_values, alternative='two-sided')
     _, p_mw_one = stats.mannwhitneyu(active_values, other_values, alternative='less')
+
+    # 3. Wilcoxon signed-rank (paired, one-tailed: Active < Other)
+    w_stat = np.nan
+    p_wilcoxon = np.nan
+    min_len = min(len(active_values), len(other_values))
+    if min_len > 0:
+        try:
+            w_stat, p_wilcoxon = stats.wilcoxon(
+                active_values[:min_len],
+                other_values[:min_len],
+                alternative='less'
+            )
+        except ValueError:
+            p_wilcoxon = np.nan
     
-    # 3. Cohen's d effect size
+    # 4. Cohen's d effect size
     cohens = cohens_d(active_values, other_values)
     effect_interpretation = interpret_cohens_d(cohens)
     
-    # 4. Descriptive statistics
+    # 5. Descriptive statistics
     mean_active = np.mean(active_values)
     mean_other = np.mean(other_values)
     mean_diff = mean_active - mean_other
     percent_diff = ((mean_active - mean_other) / mean_other) * 100 if mean_other != 0 else 0
     
-    # 5. Hypothesis support (both parametric and non-parametric)
+    # 6. Hypothesis support (parametric, non-parametric, paired)
     hypothesis_supported_welch = (mean_active < mean_other) and (p_welch < 0.05)
     hypothesis_supported_mw = (mean_active < mean_other) and (p_mw_one < 0.05)
+    hypothesis_supported_wilcoxon = (mean_active < mean_other) and (p_wilcoxon < 0.05)
     
     return {
         't_stat': t_stat,
         'p_welch': p_welch,
         'u_stat': u_stat,
         'p_mannwhitney': p_mw_one,
+        'w_stat': w_stat,
+        'p_wilcoxon': p_wilcoxon,
         'cohens_d': cohens,
         'effect_size': effect_interpretation,
         'mean_diff': mean_diff,
         'percent_diff': percent_diff,
         'hypothesis_supported_welch': hypothesis_supported_welch,
         'hypothesis_supported_mw': hypothesis_supported_mw,
+        'hypothesis_supported_wilcoxon': hypothesis_supported_wilcoxon,
         'mean_active': mean_active,
         'mean_other': mean_other
     }
@@ -102,32 +122,50 @@ def test_pairwise_comparison(group1_values, group2_values, group1_name, group2_n
     
     # 2. Mann-Whitney U test (non-parametric, two-tailed)
     u_stat, p_mw = stats.mannwhitneyu(group1_values, group2_values, alternative='two-sided')
+
+    # 3. Wilcoxon signed-rank (paired, two-tailed)
+    w_stat = np.nan
+    p_wilcoxon = np.nan
+    min_len = min(len(group1_values), len(group2_values))
+    if min_len > 0:
+        try:
+            w_stat, p_wilcoxon = stats.wilcoxon(
+                group1_values[:min_len],
+                group2_values[:min_len],
+                alternative='two-sided'
+            )
+        except ValueError:
+            p_wilcoxon = np.nan
     
-    # 3. Cohen's d effect size
+    # 4. Cohen's d effect size
     cohens = cohens_d(group1_values, group2_values)
     effect_interpretation = interpret_cohens_d(cohens)
     
-    # 4. Descriptive statistics
+    # 5. Descriptive statistics
     mean_group1 = np.mean(group1_values)
     mean_group2 = np.mean(group2_values)
     mean_diff = mean_group1 - mean_group2
     percent_diff = ((mean_group1 - mean_group2) / mean_group2) * 100 if mean_group2 != 0 else 0
     
-    # 5. Significance (two-tailed)
+    # 6. Significance (two-tailed)
     is_significant_welch = p_welch < 0.05
     is_significant_mw = p_mw < 0.05
+    is_significant_wilcoxon = p_wilcoxon < 0.05
     
     return {
         't_stat': t_stat,
         'p_welch': p_welch,
         'u_stat': u_stat,
         'p_mannwhitney': p_mw,
+        'w_stat': w_stat,
+        'p_wilcoxon': p_wilcoxon,
         'cohens_d': cohens,
         'effect_size': effect_interpretation,
         'mean_diff': mean_diff,
         'percent_diff': percent_diff,
         'is_significant_welch': is_significant_welch,
         'is_significant_mw': is_significant_mw,
+        'is_significant_wilcoxon': is_significant_wilcoxon,
         'mean_group1': mean_group1,
         'mean_group2': mean_group2,
         'group1_name': group1_name,
@@ -135,8 +173,73 @@ def test_pairwise_comparison(group1_values, group2_values, group1_name, group2_n
     }
 
 
+def collect_subject_level_metric(data_dict, analyzer, object_ids, metric):
+    """Build subject-level means for a metric across objects and conditions.
+
+    Supported metrics:
+    - duration: segment duration in seconds
+    - mvc: mean RMS (%MVC)
+    - amplitude: 90th percentile RMS across channels (%MVC)
+    - rate: amplitude per second (amplitude / duration)
+
+    Returns (subject_means, rows_df) where subject_means[condition][obj][subject] = mean_value.
+    """
+    subject_means = defaultdict(lambda: defaultdict(dict))
+    rows = []
+
+    for condition in CONDITIONS:
+        if condition not in data_dict:
+            continue
+        for obj_id in object_ids:
+            if obj_id not in data_dict[condition]:
+                continue
+
+            per_subject = defaultdict(list)
+            for record in data_dict[condition][obj_id]:
+                if metric == 'duration':
+                    value = analyzer._segment_duration(record)
+                elif metric == 'mvc':
+                    segment = analyzer._normalize_segment(record.samples, record.subject)
+                    rms = analyzer.compute_rms(segment, window_ms=100)
+                    value = float(np.mean(rms))
+                elif metric in ('amplitude', 'rate'):
+                    segment = analyzer._normalize_segment(record.samples, record.subject)
+                    rms = analyzer.compute_rms(segment, window_ms=100)
+                    percentile_per_channel = np.percentile(rms, 90.0, axis=0)
+                    amplitude = float(np.mean(percentile_per_channel))
+                    if metric == 'rate':
+                        duration = analyzer._segment_duration(record)
+                        value = amplitude / duration if duration > 0 else 0.0
+                    else:
+                        value = amplitude
+                else:
+                    continue
+
+                per_subject[record.subject].append(value)
+
+            for subject, values in per_subject.items():
+                mean_val = float(np.mean(values))
+                subject_means[condition][obj_id][subject] = mean_val
+                rows.append({
+                    'Condition': condition,
+                    'Object': obj_id,
+                    'Subject': subject,
+                    'Value': mean_val
+                })
+
+    return subject_means, pd.DataFrame(rows)
+
+
+def build_paired_lists(active_map, other_map):
+    """Align subject-level values for paired tests."""
+    shared = sorted(set(active_map.keys()) & set(other_map.keys()))
+    active_vals = [active_map[s] for s in shared]
+    other_vals = [other_map[s] for s in shared]
+    return active_vals, other_vals, shared
+
+
 def generate_amplitude_statistics():
-    """Generate statistical tests for amplitude (90th percentile RMS) comparisons"""
+    """Generate subject-level paired statistics for amplitude (90th percentile RMS)."""
     
     script_dir = Path(__file__).resolve().parent
     data_dir = script_dir / 'data' / 'healthy'
@@ -152,8 +255,9 @@ def generate_amplitude_statistics():
     loader = EMGDataLoader(data_dir)
     analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs, mvc_dict=mvc_dict)
     
-    # Collect all amplitude values for CSV export
+    # Collect session-level values for CSV export and subject-level means for paired tests
     csv_data = []
+    subject_rows = []
     
     # Create markdown report
     report_path = results_dir / 'statistical_summary_amplitude.md'
@@ -169,32 +273,27 @@ def generate_amplitude_statistics():
         # Test for each object
         for obj_id in range(6):
             f.write(f"## Object {obj_id}\n\n")
-            
-            # Collect 90th percentile amplitude values per condition
-            # Extract EXACTLY as in emg_comparative_analysis.py
-            condition_amplitudes = {}
+
+            condition_subject_means = {}
+
             for condition in CONDITIONS:
                 if condition not in data_dict or obj_id not in data_dict[condition]:
                     continue
                 records = data_dict[condition][obj_id]
                 if not records:
                     continue
-                
-                amplitude_values = []
+
+                per_subject = defaultdict(list)
+                session_values = []
                 for record in records:
-                    # Normalize with MVC
                     segment = analyzer._normalize_segment(record.samples, record.subject)
-                    
-                    # Compute RMS with 100ms window (same as main analysis)
                     rms = analyzer.compute_rms(segment, window_ms=100)
-                    
-                    # Compute 90th percentile per channel, then average
                     percentile_per_channel = np.percentile(rms, 90.0, axis=0)
                     amplitude = float(np.mean(percentile_per_channel))
-                    
-                    amplitude_values.append(amplitude)
-                    
-                    # Store for CSV export
+
+                    per_subject[record.subject].append(amplitude)
+                    session_values.append(amplitude)
+
                     csv_data.append({
                         'metric': 'amplitude',
                         'object': obj_id,
@@ -204,147 +303,152 @@ def generate_amplitude_statistics():
                         'value': amplitude,
                         'duration': record.end_time - record.start_time
                     })
-                
-                condition_amplitudes[condition] = np.array(amplitude_values)
-            
-            if 'Active glove' not in condition_amplitudes:
+
+                subj_mean_map = {subj: float(np.mean(vals)) for subj, vals in per_subject.items()}
+                condition_subject_means[condition] = subj_mean_map
+
+                for subject, mean_val in subj_mean_map.items():
+                    subject_rows.append({
+                        'Condition': condition,
+                        'Object': obj_id,
+                        'Subject': subject,
+                        'Amplitude (%MVC)': mean_val
+                    })
+
+            if 'Active glove' not in condition_subject_means:
                 f.write("*No Active glove data available*\n\n")
                 continue
-            
-            # Summary statistics
-            f.write("### Summary Statistics\n\n")
-            f.write("| Condition | N | Mean (90th %ile) | Std | Min | Max |\n")
-            f.write("|-----------|---|------------------|-----|-----|-----|\n")
+
+            # Summary statistics (subject means)
+            f.write("### Summary Statistics (subject means)\n\n")
+            f.write("| Condition | Subjects | Mean (90th %ile) | Std | Min | Max |\n")
+            f.write("|-----------|----------|------------------|-----|-----|-----|\n")
             for condition in CONDITIONS:
-                if condition in condition_amplitudes:
-                    vals = condition_amplitudes[condition]
+                subj_map = condition_subject_means.get(condition, {})
+                vals = list(subj_map.values())
+                if vals:
                     f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.2f} | "
                            f"{np.std(vals):.2f} | {np.min(vals):.2f} | {np.max(vals):.2f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - | - | - |\n")
             f.write("\n")
-            
-            # Hypothesis testing: Active < Others (COMPREHENSIVE)
-            f.write("### Hypothesis Test: Active glove < Other conditions\n\n")
-            f.write("#### Parametric Test: Welch's t-test (one-tailed)\n\n")
-            f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-            f.write("|------------|--------|---------|-----------|----------|-----------|\n")
-            
-            active_vals = condition_amplitudes['Active glove']
-            comprehensive_results = {}
-            
+
+            active_map = condition_subject_means.get('Active glove', {})
+            if not active_map:
+                f.write("No Active glove data for this object.\n\n")
+                continue
+
+            f.write("### Hypothesis: Active glove < Other (subject-paired)\n\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | Supported? (Wilcoxon) |\n")
+            f.write("|------------|-------------------|--------|---------------------|---|-------------------|---|------------------------|------------------------|\n")
+
             for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in condition_amplitudes:
-                    other_vals = condition_amplitudes[other_cond]
-                    results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
-                    comprehensive_results[other_cond] = results
-                    
-                    support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
-                    f.write(f"| Active vs {other_cond} | {results['t_stat']:.3f} | "
-                           f"{format_pvalue(results['p_welch'])} | "
-                           f"{results['mean_diff']:.2f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
-            
+                if other_cond not in condition_subject_means:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                other_map = condition_subject_means[other_cond]
+                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+
+                if len(shared) == 0:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
+                        f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
+                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
             f.write("\n")
-            
-            # Non-parametric test
-            f.write("#### Non-Parametric Test: Mann-Whitney U (one-tailed)\n\n")
-            f.write("| Comparison | U-stat | p-value | Supported? |\n")
-            f.write("|------------|--------|---------|------------|\n")
-            
-            for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in comprehensive_results:
-                    results = comprehensive_results[other_cond]
-                    support_text = "✓ YES" if results['hypothesis_supported_mw'] else "✗ NO"
-                    f.write(f"| Active vs {other_cond} | {results['u_stat']:.1f} | "
-                           f"{format_pvalue(results['p_mannwhitney'])} | **{support_text}** |\n")
-            
-            f.write("\n")
-            
-            # Effect size
-            f.write("#### Effect Size: Cohen's d\n\n")
+
+            # Effect size on subject means
+            f.write("#### Effect Size: Cohen's d (subject means)\n\n")
             f.write("| Comparison | Cohen's d | Interpretation |\n")
             f.write("|------------|-----------|----------------|\n")
-            
+
             for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in comprehensive_results:
-                    results = comprehensive_results[other_cond]
-                    f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | "
-                           f"{results['effect_size']} |\n")
-            
+                if other_cond in condition_subject_means:
+                    other_map = condition_subject_means[other_cond]
+                    active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+                    if not shared:
+                        f.write(f"| Active vs {other_cond} | - | - |\n")
+                        continue
+                    results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                    f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | {results['effect_size']} |\n")
+
             f.write("\n")
-            
-            # ANOVA for 3-way comparison
-            if len(condition_amplitudes) == 3:
-                f.write("#### ANOVA: Three-way comparison\n\n")
-                groups = [condition_amplitudes[c] for c in CONDITIONS if c in condition_amplitudes]
-                f_stat, p_anova = stats.f_oneway(*groups)
-                f.write(f"**F-statistic:** {f_stat:.3f}  \n")
-                f.write(f"**p-value:** {format_pvalue(p_anova)}  \n")
-                
-                if p_anova < 0.05:
-                    f.write("**Interpretation:** Significant difference exists between conditions\n\n")
-                else:
-                    f.write("**Interpretation:** No significant difference between conditions\n\n")
-            
-            # ALL PAIRWISE COMPARISONS (two-tailed tests)
-            f.write("### All Pairwise Comparisons (Two-tailed tests)\n\n")
-            f.write("Comparing all condition pairs to identify significant differences.\n\n")
-            
-            # Define all pairs to compare
+
+            # ALL PAIRWISE COMPARISONS (two-tailed tests, subject-paired)
+            f.write("### All Pairwise Comparisons (Two-tailed, subject-paired)\n\n")
+            f.write("Comparing all condition pairs using subject-matched means.\n\n")
+
             comparison_pairs = [
                 ('Active glove', 'No glove'),
                 ('Passive glove', 'No glove'),
                 ('Active glove', 'Passive glove')
             ]
-            
+
             pairwise_results = {}
-            
-            # Parametric tests
+
             f.write("#### Parametric Test: Welch's t-test (two-tailed)\n\n")
-            f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
-            f.write("|------------|--------|---------|-----------|----------|--------------|\n")
-            
+            f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|-----------|----------|--------------|\n")
+
             for cond1, cond2 in comparison_pairs:
-                if cond1 in condition_amplitudes and cond2 in condition_amplitudes:
-                    vals1 = condition_amplitudes[cond1]
-                    vals2 = condition_amplitudes[cond2]
+                if cond1 in condition_subject_means and cond2 in condition_subject_means:
+                    vals1, vals2, shared = build_paired_lists(condition_subject_means[cond1], condition_subject_means[cond2])
+                    if not shared:
+                        continue
                     results = test_pairwise_comparison(vals1, vals2, cond1, cond2)
-                    pairwise_results[(cond1, cond2)] = results
-                    
+                    pairwise_results[(cond1, cond2)] = (results, len(shared))
+
                     sig_text = "✓ YES" if results['is_significant_welch'] else "✗ NO"
-                    f.write(f"| {cond1} vs {cond2} | {results['t_stat']:.3f} | "
+                    f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
                            f"{format_pvalue(results['p_welch'])} | "
                            f"{results['mean_diff']:.2f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
-            
+
             f.write("\n")
-            
-            # Non-parametric tests
+
             f.write("#### Non-Parametric Test: Mann-Whitney U (two-tailed)\n\n")
-            f.write("| Comparison | U-stat | p-value | Significant? |\n")
-            f.write("|------------|--------|---------|---------------|\n")
-            
+            f.write("| Comparison | Subjects (paired) | U-stat | p-value | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|---------------|\n")
+
             for cond1, cond2 in comparison_pairs:
                 if (cond1, cond2) in pairwise_results:
-                    results = pairwise_results[(cond1, cond2)]
+                    results, n_shared = pairwise_results[(cond1, cond2)]
                     sig_text = "✓ YES" if results['is_significant_mw'] else "✗ NO"
-                    f.write(f"| {cond1} vs {cond2} | {results['u_stat']:.1f} | "
+                    f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['u_stat']:.1f} | "
                            f"{format_pvalue(results['p_mannwhitney'])} | **{sig_text}** |\n")
-            
+
             f.write("\n")
-            
-            # Effect sizes
-            f.write("#### Effect Size: Cohen's d\n\n")
-            f.write("| Comparison | Cohen's d | Interpretation | Direction |\n")
-            f.write("|------------|-----------|----------------|------------|\n")
-            
+
+            f.write("#### Paired Non-Parametric Test: Wilcoxon signed-rank (two-tailed)\n\n")
+            f.write("| Comparison | Subjects (paired) | W-stat | p-value | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|---------------|\n")
+
             for cond1, cond2 in comparison_pairs:
                 if (cond1, cond2) in pairwise_results:
-                    results = pairwise_results[(cond1, cond2)]
-                    direction = f"{cond1} > {cond2}" if results['mean_diff'] > 0 else f"{cond1} < {cond2}"
-                    f.write(f"| {cond1} vs {cond2} | {results['cohens_d']:.3f} | "
-                           f"{results['effect_size']} | {direction} |\n")
-            
+                    results, n_shared = pairwise_results[(cond1, cond2)]
+                    sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
+                    f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['w_stat']:.1f} | "
+                           f"{format_pvalue(results['p_wilcoxon'])} | **{sig_text}** |\n")
+
             f.write("\n")
-            
-            f.write("---\n\n")
+
+            f.write("#### Effect Size: Cohen's d\n\n")
+            f.write("| Comparison | Subjects (paired) | Cohen's d | Interpretation | Direction |\n")
+            f.write("|------------|-------------------|-----------|----------------|------------|\n")
+
+            for cond1, cond2 in comparison_pairs:
+                if (cond1, cond2) in pairwise_results:
+                    results, n_shared = pairwise_results[(cond1, cond2)]
+                    direction = f"{cond1} > {cond2}" if results['mean_diff'] > 0 else f"{cond1} < {cond2}"
+                    f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['cohens_d']:.3f} | "
+                           f"{results['effect_size']} | {direction} |\n")
+
+            f.write("\n---\n\n")
     
     # Export amplitude values to CSV
     import pandas as pd
@@ -352,13 +456,19 @@ def generate_amplitude_statistics():
     df = pd.DataFrame(csv_data)
     df.to_csv(csv_path, index=False)
     print(f"✓ Saved amplitude values CSV: {csv_path}")
+
+    subject_csv_path = results_dir / 'amplitude_subject_means.csv'
+    df_subject = pd.DataFrame(subject_rows)
+    if not df_subject.empty:
+        df_subject.to_csv(subject_csv_path, index=False)
+        print(f"✓ Saved amplitude subject means CSV: {subject_csv_path}")
     
     print(f"✓ Saved amplitude statistics: {report_path}")
     return report_path
 
 
 def generate_activation_statistics():
-    """Generate statistical tests for rate-based comparisons (amplitude / duration)"""
+    """Generate subject-level paired statistics for rate-based comparisons (amplitude / duration)."""
     
     script_dir = Path(__file__).resolve().parent
     data_dir = script_dir / 'data' / 'healthy'
@@ -374,8 +484,9 @@ def generate_activation_statistics():
     loader = EMGDataLoader(data_dir)
     analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs, mvc_dict=mvc_dict)
     
-    # Collect all rate values for CSV export
+    # Collect session-level values for CSV export and subject-level means for paired tests
     csv_data = []
+    subject_rows = []
     
     # Create markdown report
     report_path = results_dir / 'statistical_summary_activation.md'
@@ -394,40 +505,32 @@ def generate_activation_statistics():
         # Test for each object
         for obj_id in range(6):
             f.write(f"## Object {obj_id}\n\n")
-            
-            # Collect rate values (amplitude per second) per condition
-            condition_rate_vals = {}
-            condition_durations = {}
-            
+
+            condition_rate_means = {}
+            condition_duration_means = {}
+
             for condition in CONDITIONS:
                 if condition not in data_dict or obj_id not in data_dict[condition]:
                     continue
                 records = data_dict[condition][obj_id]
                 if not records:
                     continue
-                
-                rate_values = []
-                durations = []
+
+                per_subject_rates = defaultdict(list)
+                per_subject_durations = defaultdict(list)
+
                 for record in records:
-                    # Normalize with MVC
                     segment = analyzer._normalize_segment(record.samples, record.subject)
-                    
-                    # Compute RMS with 100ms window
                     rms = analyzer.compute_rms(segment, window_ms=100)
-                    
-                    # Compute 90th percentile amplitude
                     percentile_per_channel = np.percentile(rms, 90.0, axis=0)
                     amplitude = float(np.mean(percentile_per_channel))
-                    
-                    # Compute task duration
-                    duration = record.end_time - record.start_time
-                    durations.append(duration)
-                    
-                    # Compute rate (amplitude per second)
+
+                    duration = analyzer._segment_duration(record)
                     rate = amplitude / duration if duration > 0 else 0.0
-                    rate_values.append(rate)
-                    
-                    # Store for CSV export
+
+                    per_subject_rates[record.subject].append(rate)
+                    per_subject_durations[record.subject].append(duration)
+
                     csv_data.append({
                         'metric': 'rate',
                         'object': obj_id,
@@ -438,162 +541,174 @@ def generate_activation_statistics():
                         'duration': duration,
                         'rate': rate
                     })
-                
-                condition_rate_vals[condition] = np.array(rate_values)
-                condition_durations[condition] = np.array(durations)
-            
-            if 'Active glove' not in condition_rate_vals:
+
+                rate_map = {subj: float(np.mean(vals)) for subj, vals in per_subject_rates.items()}
+                dur_map = {subj: float(np.mean(vals)) for subj, vals in per_subject_durations.items()}
+
+                condition_rate_means[condition] = rate_map
+                condition_duration_means[condition] = dur_map
+
+                for subject, mean_rate in rate_map.items():
+                    subject_rows.append({
+                        'Condition': condition,
+                        'Object': obj_id,
+                        'Subject': subject,
+                        'Rate (amp/s)': mean_rate,
+                        'Duration (s)': dur_map.get(subject, np.nan)
+                    })
+
+            if 'Active glove' not in condition_rate_means:
                 f.write("*No Active glove data available*\n\n")
                 continue
-            
-            # Summary statistics for rate
-            f.write("### Summary Statistics: Rate (Amplitude per Second)\n\n")
-            f.write("| Condition | N | Mean Rate | Std | Mean Duration (s) |\n")
-            f.write("|-----------|---|-----------|-----|-------------------|\n")
+
+            f.write("### Summary Statistics: Rate (subject means)\n\n")
+            f.write("| Condition | Subjects | Mean Rate | Std | Mean Duration (s) |\n")
+            f.write("|-----------|----------|-----------|-----|-------------------|\n")
             for condition in CONDITIONS:
-                if condition in condition_rate_vals:
-                    rates = condition_rate_vals[condition]
-                    durations = condition_durations[condition]
+                rates = list(condition_rate_means.get(condition, {}).values())
+                durs = list(condition_duration_means.get(condition, {}).values())
+                if rates:
                     f.write(f"| {condition} | {len(rates)} | {np.mean(rates):.2f} | "
-                           f"{np.std(rates):.2f} | {np.mean(durations):.2f} |\n")
+                           f"{np.std(rates):.2f} | {np.mean(durs) if durs else np.nan:.2f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - | - |\n")
             f.write("\n")
-            
-            # Hypothesis testing for RATE: Active < Others (COMPREHENSIVE)
-            f.write("### Hypothesis Test (Rate): Active glove < Other conditions\n\n")
-            f.write("#### Parametric Test: Welch's t-test (one-tailed)\n\n")
-            f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-            f.write("|------------|--------|---------|-----------|----------|-----------|\n")
-            
-            active_vals = condition_rate_vals['Active glove']
-            comprehensive_results = {}
-            
+
+            active_map = condition_rate_means.get('Active glove', {})
+            if not active_map:
+                f.write("No Active glove data for this object.\n\n")
+                continue
+
+            f.write("### Hypothesis (Rate): Active glove < Other (subject-paired)\n\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | Supported? (Wilcoxon) |\n")
+            f.write("|------------|-------------------|--------|---------------------|---|-------------------|---|------------------------|------------------------|\n")
+
             for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in condition_rate_vals:
-                    other_vals = condition_rate_vals[other_cond]
-                    results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
-                    comprehensive_results[other_cond] = results
-                    
-                    support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
-                    f.write(f"| Active vs {other_cond} | {results['t_stat']:.3f} | "
-                           f"{format_pvalue(results['p_welch'])} | "
-                           f"{results['mean_diff']:.2f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
-            
+                if other_cond not in condition_rate_means:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                other_map = condition_rate_means[other_cond]
+                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+
+                if len(shared) == 0:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
+                        f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
+                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
             f.write("\n")
-            
-            # Non-parametric test
-            f.write("#### Non-Parametric Test: Mann-Whitney U (one-tailed)\n\n")
-            f.write("| Comparison | U-stat | p-value | Supported? |\n")
-            f.write("|------------|--------|---------|------------|\n")
-            
-            for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in comprehensive_results:
-                    results = comprehensive_results[other_cond]
-                    support_text = "✓ YES" if results['hypothesis_supported_mw'] else "✗ NO"
-                    f.write(f"| Active vs {other_cond} | {results['u_stat']:.1f} | "
-                           f"{format_pvalue(results['p_mannwhitney'])} | **{support_text}** |\n")
-            
-            f.write("\n")
-            
-            # Effect size
-            f.write("#### Effect Size: Cohen's d\n\n")
+
+            f.write("#### Effect Size: Cohen's d (subject means)\n\n")
             f.write("| Comparison | Cohen's d | Interpretation |\n")
             f.write("|------------|-----------|----------------|\n")
-            
+
             for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in comprehensive_results:
-                    results = comprehensive_results[other_cond]
-                    f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | "
-                           f"{results['effect_size']} |\n")
-            
+                if other_cond in condition_rate_means:
+                    other_map = condition_rate_means[other_cond]
+                    active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+                    if not shared:
+                        f.write(f"| Active vs {other_cond} | - | - |\n")
+                        continue
+                    results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                    f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | {results['effect_size']} |\n")
+
             f.write("\n")
-            
-            # ANOVA for 3-way comparison (rate)
-            if len(condition_rate_vals) == 3:
-                f.write("#### ANOVA: Three-way comparison (Rate)\n\n")
-                groups = [condition_rate_vals[c] for c in CONDITIONS if c in condition_rate_vals]
-                f_stat, p_anova = stats.f_oneway(*groups)
-                f.write(f"**F-statistic:** {f_stat:.3f}  \n")
-                f.write(f"**p-value:** {format_pvalue(p_anova)}  \n")
-                
-                if p_anova < 0.05:
-                    f.write("**Interpretation:** Significant difference exists between conditions\n\n")
-                else:
-                    f.write("**Interpretation:** No significant difference between conditions\n\n")
-            
-            # ALL PAIRWISE COMPARISONS FOR RATE (two-tailed tests)
-            f.write("### All Pairwise Comparisons - Rate (Two-tailed tests)\n\n")
-            f.write("Comparing all condition pairs for rate differences.\n\n")
-            
-            # Define all pairs to compare
+
+            f.write("### All Pairwise Comparisons - Rate (Two-tailed, subject-paired)\n\n")
+            f.write("Comparing all condition pairs using subject-matched mean rates.\n\n")
+
             comparison_pairs = [
                 ('Active glove', 'No glove'),
                 ('Passive glove', 'No glove'),
                 ('Active glove', 'Passive glove')
             ]
-            
+
             pairwise_rate_results = {}
-            
-            # Parametric tests
+
             f.write("#### Parametric Test: Welch's t-test (two-tailed)\n\n")
-            f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
-            f.write("|------------|--------|---------|-----------|----------|--------------|\n")
-            
+            f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|-----------|----------|--------------|\n")
+
             for cond1, cond2 in comparison_pairs:
-                if cond1 in condition_rate_vals and cond2 in condition_rate_vals:
-                    vals1 = condition_rate_vals[cond1]
-                    vals2 = condition_rate_vals[cond2]
+                if cond1 in condition_rate_means and cond2 in condition_rate_means:
+                    vals1, vals2, shared = build_paired_lists(condition_rate_means[cond1], condition_rate_means[cond2])
+                    if not shared:
+                        continue
                     results = test_pairwise_comparison(vals1, vals2, cond1, cond2)
-                    pairwise_rate_results[(cond1, cond2)] = results
-                    
+                    pairwise_rate_results[(cond1, cond2)] = (results, len(shared))
+
                     sig_text = "✓ YES" if results['is_significant_welch'] else "✗ NO"
-                    f.write(f"| {cond1} vs {cond2} | {results['t_stat']:.3f} | "
+                    f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
                            f"{format_pvalue(results['p_welch'])} | "
                            f"{results['mean_diff']:.2f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
-            
+
             f.write("\n")
-            
-            # Non-parametric tests
+
             f.write("#### Non-Parametric Test: Mann-Whitney U (two-tailed)\n\n")
-            f.write("| Comparison | U-stat | p-value | Significant? |\n")
-            f.write("|------------|--------|---------|---------------|\n")
-            
+            f.write("| Comparison | Subjects (paired) | U-stat | p-value | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|---------------|\n")
+
             for cond1, cond2 in comparison_pairs:
                 if (cond1, cond2) in pairwise_rate_results:
-                    results = pairwise_rate_results[(cond1, cond2)]
+                    results, n_shared = pairwise_rate_results[(cond1, cond2)]
                     sig_text = "✓ YES" if results['is_significant_mw'] else "✗ NO"
-                    f.write(f"| {cond1} vs {cond2} | {results['u_stat']:.1f} | "
+                    f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['u_stat']:.1f} | "
                            f"{format_pvalue(results['p_mannwhitney'])} | **{sig_text}** |\n")
-            
+
             f.write("\n")
-            
-            # Effect sizes
-            f.write("#### Effect Size: Cohen's d\n\n")
-            f.write("| Comparison | Cohen's d | Interpretation | Direction |\n")
-            f.write("|------------|-----------|----------------|------------|\n")
-            
+
+            f.write("#### Paired Non-Parametric Test: Wilcoxon signed-rank (two-tailed)\n\n")
+            f.write("| Comparison | Subjects (paired) | W-stat | p-value | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|---------------|\n")
+
             for cond1, cond2 in comparison_pairs:
                 if (cond1, cond2) in pairwise_rate_results:
-                    results = pairwise_rate_results[(cond1, cond2)]
-                    direction = f"{cond1} > {cond2}" if results['mean_diff'] > 0 else f"{cond1} < {cond2}"
-                    f.write(f"| {cond1} vs {cond2} | {results['cohens_d']:.3f} | "
-                           f"{results['effect_size']} | {direction} |\n")
-            
+                    results, n_shared = pairwise_rate_results[(cond1, cond2)]
+                    sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
+                    f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['w_stat']:.1f} | "
+                           f"{format_pvalue(results['p_wilcoxon'])} | **{sig_text}** |\n")
+
             f.write("\n")
-            
-            # Duration comparison
-            f.write("### Task Duration Comparison\n\n")
-            f.write("*Two-tailed t-test*\n\n")
-            f.write("| Comparison | Mean Diff (s) | t-statistic | p-value |\n")
-            f.write("|------------|---------------|-------------|---------|\n")
-            
-            active_dur = condition_durations['Active glove']
+
+            f.write("#### Effect Size: Cohen's d\n\n")
+            f.write("| Comparison | Subjects (paired) | Cohen's d | Interpretation | Direction |\n")
+            f.write("|------------|-------------------|-----------|----------------|------------|\n")
+
+            for cond1, cond2 in comparison_pairs:
+                if (cond1, cond2) in pairwise_rate_results:
+                    results, n_shared = pairwise_rate_results[(cond1, cond2)]
+                    direction = f"{cond1} > {cond2}" if results['mean_diff'] > 0 else f"{cond1} < {cond2}"
+                    f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['cohens_d']:.3f} | "
+                           f"{results['effect_size']} | {direction} |\n")
+
+            f.write("\n")
+
+            f.write("### Task Duration Comparison (subject-paired)\n\n")
+            f.write("| Comparison | Subjects (paired) | Mean Diff (s) | t-statistic (paired) | p-value |\n")
+            f.write("|------------|-------------------|---------------|----------------------|---------|\n")
+
+            active_dur_map = condition_duration_means.get('Active glove', {})
             for other_cond in ['Passive glove', 'No glove']:
-                if other_cond in condition_durations:
-                    other_dur = condition_durations[other_cond]
-                    t_stat, p_val = stats.ttest_ind(active_dur, other_dur)
-                    mean_diff = np.mean(active_dur) - np.mean(other_dur)
-                    f.write(f"| Active vs {other_cond} | {mean_diff:+.2f} | {t_stat:.3f} | {format_pvalue(p_val)} |\n")
-            
+                if other_cond not in condition_duration_means:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - |\n")
+                    continue
+
+                other_dur_map = condition_duration_means[other_cond]
+                active_durs, other_durs, shared = build_paired_lists(active_dur_map, other_dur_map)
+                if not shared:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - |\n")
+                    continue
+
+                t_stat, p_val = stats.ttest_rel(active_durs, other_durs)
+                mean_diff = np.mean(active_durs) - np.mean(other_durs)
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {mean_diff:+.2f} | {t_stat:.3f} | {format_pvalue(p_val)} |\n")
+
             f.write("\n---\n\n")
     
     # Export rate values to CSV
@@ -602,44 +717,215 @@ def generate_activation_statistics():
     df = pd.DataFrame(csv_data)
     df.to_csv(csv_path, index=False)
     print(f"✓ Saved rate values CSV: {csv_path}")
+
+    subject_csv_path = results_dir / 'rate_subject_means.csv'
+    df_subject = pd.DataFrame(subject_rows)
+    if not df_subject.empty:
+        df_subject.to_csv(subject_csv_path, index=False)
+        print(f"✓ Saved rate subject means CSV: {subject_csv_path}")
     
     print(f"✓ Saved rate statistics: {report_path}")
     return report_path
 
 
-def generate_pca_statistics():
-    """Generate statistical tests for PCA analysis with feature-based approach"""
-    
+def generate_duration_statistics():
+    """Generate subject-level duration stats (per object, per condition) with paired Wilcoxon."""
+    import pandas as pd
+
     script_dir = Path(__file__).resolve().parent
     data_dir = script_dir / 'data' / 'healthy'
     results_dir = script_dir / 'results-analysis'
     results_dir.mkdir(exist_ok=True)
-    
-    # Load data with MVC normalization
+
+    data_dict, inferred_fs, mvc_dict = load_real_data(data_dir)
+    if data_dict is None:
+        print("Failed to load data for duration statistics")
+        return
+
+    analyzer = EMGAnalyzer(EMGDataLoader(data_dir), fs_hz=inferred_fs, mvc_dict=mvc_dict)
+    object_ids = list(range(6))
+
+    subject_means, df_subject = collect_subject_level_metric(data_dict, analyzer, object_ids, metric='duration')
+    df_subject = df_subject.rename(columns={'Value': 'Duration (s)'})
+
+    # Save subject-level means
+    duration_csv = results_dir / 'duration_subject_means.csv'
+    df_subject.to_csv(duration_csv, index=False)
+    print(f"✓ Saved duration subject means: {duration_csv}")
+
+    report_path = results_dir / 'statistical_summary_duration.md'
+
+    with open(report_path, 'w') as f:
+        f.write("# Statistical Analysis: Task Duration (Subject-Level)\n\n")
+        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write("**Metric:** Mean segment duration per subject, per object, per condition (seconds).\n\n")
+        f.write("**Tests:** Welch (one-tailed Active < Other), Mann-Whitney (one-tailed), Wilcoxon paired (Active < Other, subject-matched).\n\n")
+        f.write("**Pairing rule:** Wilcoxon uses only subjects present in both conditions for each object.\n\n")
+        f.write("---\n\n")
+
+        for obj_id in object_ids:
+            f.write(f"## Object {obj_id}\n\n")
+
+            # Summary stats
+            f.write("### Summary Statistics (subject means)\n\n")
+            f.write("| Condition | Subjects | Mean (s) | Std (s) |\n")
+            f.write("|-----------|----------|---------|---------|\n")
+            for condition in CONDITIONS:
+                vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
+                if vals:
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - |\n")
+            f.write("\n")
+
+            # Hypothesis testing Active vs others
+            if 'Active glove' not in subject_means or obj_id not in subject_means['Active glove']:
+                f.write("No Active glove data for this object.\n\n")
+                continue
+
+            active_map = subject_means['Active glove'][obj_id]
+            f.write("### Hypothesis: Active glove < Other\n\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | Supported? (Wilcoxon) |\n")
+            f.write("|------------|-------------------|--------|---------------------|---|-------------------|---|------------------------|------------------------|\n")
+
+            for other_cond in ['Passive glove', 'No glove']:
+                if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                other_map = subject_means[other_cond][obj_id]
+                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+
+                if len(shared) == 0:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
+                        f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
+                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
+            f.write("\n---\n\n")
+
+    print(f"✓ Saved duration statistics: {report_path}")
+    return report_path
+
+
+def generate_mvc_statistics():
+    """Generate subject-level %MVC stats (per object, per condition) with paired Wilcoxon."""
+    import pandas as pd
+
+    script_dir = Path(__file__).resolve().parent
+    data_dir = script_dir / 'data' / 'healthy'
+    results_dir = script_dir / 'results-analysis'
+    results_dir.mkdir(exist_ok=True)
+
+    data_dict, inferred_fs, mvc_dict = load_real_data(data_dir)
+    if data_dict is None:
+        print("Failed to load data for MVC statistics")
+        return
+
+    analyzer = EMGAnalyzer(EMGDataLoader(data_dir), fs_hz=inferred_fs, mvc_dict=mvc_dict)
+    object_ids = list(range(6))
+
+    subject_means, df_subject = collect_subject_level_metric(data_dict, analyzer, object_ids, metric='mvc')
+    df_subject = df_subject.rename(columns={'Value': '%MVC'})
+
+    mvc_csv = results_dir / 'mvc_subject_means.csv'
+    df_subject.to_csv(mvc_csv, index=False)
+    print(f"✓ Saved MVC subject means: {mvc_csv}")
+
+    report_path = results_dir / 'statistical_summary_mvc.md'
+
+    with open(report_path, 'w') as f:
+        f.write("# Statistical Analysis: %MVC (Subject-Level)\n\n")
+        f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write("**Metric:** Mean RMS (%MVC) per subject, per object, per condition.\n\n")
+        f.write("**Tests:** Welch (one-tailed Active < Other), Mann-Whitney (one-tailed), Wilcoxon paired (Active < Other, subject-matched).\n\n")
+        f.write("**Pairing rule:** Wilcoxon uses only subjects present in both conditions for each object.\n\n")
+        f.write("---\n\n")
+
+        for obj_id in object_ids:
+            f.write(f"## Object {obj_id}\n\n")
+
+            f.write("### Summary Statistics (subject means)\n\n")
+            f.write("| Condition | Subjects | Mean %MVC | Std %MVC |\n")
+            f.write("|-----------|----------|-----------|----------|\n")
+            for condition in CONDITIONS:
+                vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
+                if vals:
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - |\n")
+            f.write("\n")
+
+            if 'Active glove' not in subject_means or obj_id not in subject_means['Active glove']:
+                f.write("No Active glove data for this object.\n\n")
+                continue
+
+            active_map = subject_means['Active glove'][obj_id]
+            f.write("### Hypothesis: Active glove < Other\n\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | Supported? (Wilcoxon) |\n")
+            f.write("|------------|-------------------|--------|---------------------|---|-------------------|---|------------------------|------------------------|\n")
+
+            for other_cond in ['Passive glove', 'No glove']:
+                if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                other_map = subject_means[other_cond][obj_id]
+                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+
+                if len(shared) == 0:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
+                        f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
+                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
+            f.write("\n---\n\n")
+
+    print(f"✓ Saved MVC statistics: {report_path}")
+    return report_path
+
+
+def generate_pca_statistics():
+    """Generate subject-level paired statistics for PCA analysis with feature-based approach."""
+
+    script_dir = Path(__file__).resolve().parent
+    data_dir = script_dir / 'data' / 'healthy'
+    results_dir = script_dir / 'results-analysis'
+    results_dir.mkdir(exist_ok=True)
+
     data_dict, inferred_fs, mvc_dict = load_real_data(data_dir)
     if data_dict is None:
         print("Failed to load data for PCA statistics")
         return
-    
+
     loader = EMGDataLoader(data_dir)
     analyzer = EMGAnalyzer(loader, fs_hz=inferred_fs, mvc_dict=mvc_dict)
-    
+
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
-    
-    # Collect all PCA values for CSV export
+
     csv_data = []
-    
-    # Create markdown report
+    subject_rows = []
+
     report_path = results_dir / 'statistical_summary_pca.md'
-    
+
     with open(report_path, 'w') as f:
         f.write("# Statistical Analysis: PCA Feature-Based Comparisons\n\n")
         f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write("**Dataset:** S1, S2, S5-S10 (8 subjects, balanced 3 sessions per condition per subject)\n\n")
         f.write("**Note:** S7 has 8 sessions (3 no, 2 passive, 3 active)\n\n")
         f.write("**Normalization:** MVC (Maximum Voluntary Contraction) - all values expressed as %MVC\n\n")
-        f.write("**Metric:** PCA on temporal features (duration-independent)\n\n")
+        f.write("**Metric:** PCA on temporal features (duration-independent); tests run on subject-level means.\n\n")
         f.write("**Rationale:** Each segment contributes equally to PCA (one feature vector per segment) ")
         f.write("regardless of duration. This removes sample size bias where longer tasks would dominate principal components.\n\n")
         f.write("**Features per segment:**\n")
@@ -647,349 +933,407 @@ def generate_pca_statistics():
         f.write("- Global statistics: mean/std/percentile/peak across channels\n")
         f.write("- Temporal metrics: activation duration, burst frequency\n")
         f.write("- Cross-channel coordination: mean correlation\n\n")
-        f.write("**References:**\n")
-        f.write("- Phinyomark et al. (2012). Feature extraction for EMG classification. *Expert Syst Appl* 39(8):7420-7431.\n\n")
         f.write("**Related Figures:**\n")
         f.write("- `figureC_pca_single_objects_1.svg`\n")
         f.write("- `figureC_pca_all_objects_0_1_2_3_4_5.svg`\n")
         f.write("- `figureC_pca_object_*.svg` (per-object PCA)\n\n")
         f.write("---\n\n")
-        
-        # Test for each object
+
         for obj_id in range(6):
             f.write(f"## Object {obj_id}\n\n")
-            
-            # Collect temporal features for PCA (equal samples per segment)
+
             condition_features = {}
-            
+            condition_records = {}
+
             for condition in CONDITIONS:
                 if condition not in data_dict or obj_id not in data_dict[condition]:
                     continue
                 records = data_dict[condition][obj_id]
                 if not records:
                     continue
-                
+
                 features_list = []
                 for record in records:
                     segment = analyzer._normalize_segment(record.samples, record.subject)
-                    # Extract temporal features: 1 row per segment (duration-independent)
                     features = analyzer.extract_temporal_features(segment, window_ms=100)
                     features_list.append(features)
-                
                 condition_features[condition] = np.array(features_list)
-            
+                condition_records[condition] = records
+
             if len(condition_features) < 2:
                 f.write("*Insufficient data for PCA analysis*\n\n")
                 continue
-            
-            # Perform PCA with StandardScaler
+
             all_features = np.vstack([condition_features[c] for c in CONDITIONS if c in condition_features])
             scaler = StandardScaler()
             all_features_scaled = scaler.fit_transform(all_features)
-            
+
             pca = PCA(n_components=2)
             pca.fit(all_features_scaled)
-            
+
             f.write(f"### PCA Results\n\n")
             f.write(f"- **Explained variance:** PC1={pca.explained_variance_ratio_[0]*100:.1f}%, ")
             f.write(f"PC2={pca.explained_variance_ratio_[1]*100:.1f}%\n")
             f.write(f"- **Total variance explained:** {(pca.explained_variance_ratio_[0] + pca.explained_variance_ratio_[1])*100:.1f}%\n\n")
-            
-            # Transform and compute PC values and magnitudes
-            condition_magnitudes = {}
-            condition_pc1 = {}
-            condition_pc2 = {}
-            condition_records_map = {}  # Track which record corresponds to which index
-            
+
+            pc1_maps = {}
+            pc2_maps = {}
+            mag_maps = {}
+
             for condition in CONDITIONS:
                 if condition in condition_features:
-                    # Scale and transform
                     scaled = scaler.transform(condition_features[condition])
                     transformed = pca.transform(scaled)
-                    condition_pc1[condition] = np.abs(transformed[:, 0])  # Use absolute for magnitude
-                    condition_pc2[condition] = np.abs(transformed[:, 1])
-                    magnitudes = np.sqrt(transformed[:, 0]**2 + transformed[:, 1]**2)
-                    condition_magnitudes[condition] = magnitudes
-                    
-                    # Store for CSV - get corresponding records
-                    records = data_dict[condition][obj_id]
-                    for idx, (magnitude, pc1_val, pc2_val, record) in enumerate(zip(magnitudes, condition_pc1[condition], condition_pc2[condition], records)):
+                    pc1_vals = np.abs(transformed[:, 0])
+                    pc2_vals = np.abs(transformed[:, 1])
+                    magnitudes = np.linalg.norm(transformed[:, :2], axis=1)
+
+                    per_subject = defaultdict(lambda: {'pc1': [], 'pc2': [], 'mag': []})
+                    records = condition_records[condition]
+                    for pc1_val, pc2_val, mag, record in zip(pc1_vals, pc2_vals, magnitudes, records):
+                        per_subject[record.subject]['pc1'].append(pc1_val)
+                        per_subject[record.subject]['pc2'].append(pc2_val)
+                        per_subject[record.subject]['mag'].append(mag)
+
                         csv_data.append({
                             'metric': 'pca_magnitude',
                             'object': obj_id,
                             'condition': condition,
                             'subject': record.subject,
                             'session': record.session,
-                            'pca_magnitude': float(magnitude),
+                            'pca_magnitude': float(mag),
                             'pc1_abs': float(pc1_val),
                             'pc2_abs': float(pc2_val),
                             'explained_var_pc1': pca.explained_variance_ratio_[0],
                             'explained_var_pc2': pca.explained_variance_ratio_[1]
                         })
-            
-            # Summary statistics for PC1
-            f.write("### PC1 Values (Absolute)\n\n")
-            f.write("| Condition | N | Mean PC1 | Std |\n")
-            f.write("|-----------|---|----------|-----|\n")
+
+                    pc1_maps[condition] = {subj: float(np.mean(vals['pc1'])) for subj, vals in per_subject.items()}
+                    pc2_maps[condition] = {subj: float(np.mean(vals['pc2'])) for subj, vals in per_subject.items()}
+                    mag_maps[condition] = {subj: float(np.mean(vals['mag'])) for subj, vals in per_subject.items()}
+
+                    for subject in per_subject:
+                        subject_rows.append({
+                            'Condition': condition,
+                            'Object': obj_id,
+                            'Subject': subject,
+                            'PC1_abs': pc1_maps[condition][subject],
+                            'PC2_abs': pc2_maps[condition][subject],
+                            'Magnitude': mag_maps[condition][subject]
+                        })
+
+            # Summary statistics for PC1 (subject means)
+            f.write("### PC1 Values (subject means, absolute)\n\n")
+            f.write("| Condition | Subjects | Mean PC1 | Std |\n")
+            f.write("|-----------|----------|----------|-----|\n")
             for condition in CONDITIONS:
-                if condition in condition_pc1:
-                    vals = condition_pc1[condition]
+                vals = list(pc1_maps.get(condition, {}).values())
+                if vals:
                     f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
-            
-            # Hypothesis testing for PC1 (COMPREHENSIVE)
-            if 'Active glove' in condition_pc1:
-                f.write("**PC1 Hypothesis Test: Active glove < Others**\n\n")
+
+            if pc1_maps.get('Active glove'):
+                f.write("**PC1 Hypothesis Test (subject-paired): Active glove < Others**\n\n")
                 f.write("##### Welch's t-test (one-tailed)\n\n")
-                f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-                f.write("|------------|--------|---------|-----------|----------|-----------|\n")
-                
-                active_pc1 = condition_pc1['Active glove']
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|----------|-----------|\n")
+
+                active_pc1_map = pc1_maps['Active glove']
                 pc1_results = {}
-                
+
                 for other_cond in ['Passive glove', 'No glove']:
-                    if other_cond in condition_pc1:
-                        other_pc1 = condition_pc1[other_cond]
-                        results = test_hypothesis_comprehensive(active_pc1, other_pc1, other_cond)
-                        pc1_results[other_cond] = results
-                        
+                    if other_cond in pc1_maps:
+                        active_vals, other_vals, shared = build_paired_lists(active_pc1_map, pc1_maps[other_cond])
+                        if not shared:
+                            continue
+                        results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                        pc1_results[other_cond] = (results, len(shared))
                         support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
-                        f.write(f"| Active vs {other_cond} | {results['t_stat']:.3f} | "
+                        f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
                                f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Non-parametric for PC1
+
+                f.write("##### Wilcoxon signed-rank (one-tailed)\n\n")
+                f.write("| Comparison | Subjects (paired) | W-stat | p-value | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|------------|\n")
+
+                for other_cond in ['Passive glove', 'No glove']:
+                    if other_cond in pc1_results:
+                        results, n_shared = pc1_results[other_cond]
+                        support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['w_stat']:.1f} | "
+                               f"{format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
+                f.write("\n")
+
                 f.write("##### Mann-Whitney U (one-tailed)\n\n")
-                f.write("| Comparison | U-stat | p-value | Supported? |\n")
-                f.write("|------------|--------|---------|------------|\n")
-                
+                f.write("| Comparison | Subjects (paired) | U-stat | p-value | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
                     if other_cond in pc1_results:
-                        results = pc1_results[other_cond]
+                        results, n_shared = pc1_results[other_cond]
                         support_text = "✓ YES" if results['hypothesis_supported_mw'] else "✗ NO"
-                        f.write(f"| Active vs {other_cond} | {results['u_stat']:.1f} | "
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['u_stat']:.1f} | "
                                f"{format_pvalue(results['p_mannwhitney'])} | **{support_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Effect size for PC1
+
                 f.write("##### Cohen's d\n\n")
-                f.write("| Comparison | Cohen's d | Interpretation |\n")
-                f.write("|------------|-----------|----------------|\n")
-                
+                f.write("| Comparison | Subjects (paired) | Cohen's d | Interpretation |\n")
+                f.write("|------------|-------------------|-----------|----------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
                     if other_cond in pc1_results:
-                        results = pc1_results[other_cond]
-                        f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | "
-                               f"{results['effect_size']} |\n")
-                
+                        results, n_shared = pc1_results[other_cond]
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['cohens_d']:.3f} | {results['effect_size']} |\n")
+
                 f.write("\n")
-            
-            # Summary statistics for PC2
-            f.write("### PC2 Values\n\n")
-            f.write("| Condition | N | Mean PC2 | Std |\n")
-            f.write("|-----------|---|----------|-----|\n")
+
+            # Summary statistics for PC2 (subject means)
+            f.write("### PC2 Values (subject means)\n\n")
+            f.write("| Condition | Subjects | Mean PC2 | Std |\n")
+            f.write("|-----------|----------|----------|-----|\n")
             for condition in CONDITIONS:
-                if condition in condition_pc2:
-                    vals = condition_pc2[condition]
+                vals = list(pc2_maps.get(condition, {}).values())
+                if vals:
                     f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
-            
-            # Hypothesis testing for PC2 (COMPREHENSIVE)
-            if 'Active glove' in condition_pc2:
-                f.write("**PC2 Hypothesis Test: Active glove < Others**\n\n")
+
+            if pc2_maps.get('Active glove'):
+                f.write("**PC2 Hypothesis Test (subject-paired): Active glove < Others**\n\n")
                 f.write("##### Welch's t-test (one-tailed, absolute values)\n\n")
-                f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-                f.write("|------------|--------|---------|-----------|----------|-----------|\n")
-                
-                active_pc2 = condition_pc2['Active glove']
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|----------|-----------|\n")
+
+                active_pc2_map = pc2_maps['Active glove']
                 pc2_results = {}
-                
+
                 for other_cond in ['Passive glove', 'No glove']:
-                    if other_cond in condition_pc2:
-                        other_pc2 = condition_pc2[other_cond]
-                        results = test_hypothesis_comprehensive(np.abs(active_pc2), np.abs(other_pc2), other_cond)
-                        pc2_results[other_cond] = results
-                        
+                    if other_cond in pc2_maps:
+                        active_vals, other_vals, shared = build_paired_lists(active_pc2_map, pc2_maps[other_cond])
+                        if not shared:
+                            continue
+                        results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                        pc2_results[other_cond] = (results, len(shared))
                         support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
-                        f.write(f"| Active vs {other_cond} (abs) | {results['t_stat']:.3f} | "
+                        f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
                                f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Non-parametric for PC2
+
                 f.write("##### Mann-Whitney U (one-tailed, absolute values)\n\n")
-                f.write("| Comparison | U-stat | p-value | Supported? |\n")
-                f.write("|------------|--------|---------|------------|\n")
-                
+                f.write("| Comparison | Subjects (paired) | U-stat | p-value | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
                     if other_cond in pc2_results:
-                        results = pc2_results[other_cond]
+                        results, n_shared = pc2_results[other_cond]
                         support_text = "✓ YES" if results['hypothesis_supported_mw'] else "✗ NO"
-                        f.write(f"| Active vs {other_cond} | {results['u_stat']:.1f} | "
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['u_stat']:.1f} | "
                                f"{format_pvalue(results['p_mannwhitney'])} | **{support_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Effect size for PC2
-                f.write("##### Cohen's d\n\n")
-                f.write("| Comparison | Cohen's d | Interpretation |\n")
-                f.write("|------------|-----------|----------------|\n")
-                
+
+                f.write("##### Wilcoxon signed-rank (one-tailed, absolute values)\n\n")
+                f.write("| Comparison | Subjects (paired) | W-stat | p-value | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
                     if other_cond in pc2_results:
-                        results = pc2_results[other_cond]
-                        f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | "
-                               f"{results['effect_size']} |\n")
-                
+                        results, n_shared = pc2_results[other_cond]
+                        support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['w_stat']:.1f} | "
+                               f"{format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
                 f.write("\n")
-            
-            # Summary statistics for magnitude
-            f.write("### PCA Magnitude Statistics\n\n")
-            f.write("| Condition | N | Mean Magnitude | Std |\n")
-            f.write("|-----------|---|----------------|-----|\n")
-            for condition in CONDITIONS:
-                if condition in condition_magnitudes:
-                    mags = condition_magnitudes[condition]
-                    f.write(f"| {condition} | {len(mags)} | {np.mean(mags):.3f} | {np.std(mags):.3f} |\n")
-            f.write("\n")
-            
-            # Hypothesis testing for magnitude (COMPREHENSIVE)
-            if 'Active glove' in condition_magnitudes:
-                f.write("### Hypothesis Test: Active glove magnitude < Others\n\n")
-                f.write("#### Parametric Test: Welch's t-test (one-tailed)\n\n")
-                f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-                f.write("|------------|--------|---------|-----------|----------|-----------|\n")
-                
-                active_mags = condition_magnitudes['Active glove']
-                mag_results = {}
-                
+
+                f.write("##### Cohen's d\n\n")
+                f.write("| Comparison | Subjects (paired) | Cohen's d | Interpretation |\n")
+                f.write("|------------|-------------------|-----------|----------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
-                    if other_cond in condition_magnitudes:
-                        other_mags = condition_magnitudes[other_cond]
-                        results = test_hypothesis_comprehensive(active_mags, other_mags, other_cond)
-                        mag_results[other_cond] = results
-                        
+                    if other_cond in pc2_results:
+                        results, n_shared = pc2_results[other_cond]
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['cohens_d']:.3f} | {results['effect_size']} |\n")
+
+                f.write("\n")
+
+            # Summary statistics for magnitude (subject means)
+            f.write("### PCA Magnitude Statistics (subject means)\n\n")
+            f.write("| Condition | Subjects | Mean Magnitude | Std |\n")
+            f.write("|-----------|----------|----------------|-----|\n")
+            for condition in CONDITIONS:
+                mags = list(mag_maps.get(condition, {}).values())
+                if mags:
+                    f.write(f"| {condition} | {len(mags)} | {np.mean(mags):.3f} | {np.std(mags):.3f} |\n")
+                else:
+                    f.write(f"| {condition} | 0 | - | - |\n")
+            f.write("\n")
+
+            if mag_maps.get('Active glove'):
+                f.write("### Hypothesis Test: Active glove magnitude < Others (subject-paired)\n\n")
+                f.write("#### Parametric Test: Welch's t-test (one-tailed)\n\n")
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|----------|-----------|\n")
+
+                active_mag_map = mag_maps['Active glove']
+                mag_results = {}
+
+                for other_cond in ['Passive glove', 'No glove']:
+                    if other_cond in mag_maps:
+                        active_vals, other_vals, shared = build_paired_lists(active_mag_map, mag_maps[other_cond])
+                        if not shared:
+                            continue
+                        results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                        mag_results[other_cond] = (results, len(shared))
                         support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
-                        f.write(f"| Active vs {other_cond} | {results['t_stat']:.3f} | "
+                        f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
                                f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Non-parametric test
+
                 f.write("#### Non-Parametric Test: Mann-Whitney U (one-tailed)\n\n")
-                f.write("| Comparison | U-stat | p-value | Supported? |\n")
-                f.write("|------------|--------|---------|------------|\n")
-                
+                f.write("| Comparison | Subjects (paired) | U-stat | p-value | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
                     if other_cond in mag_results:
-                        results = mag_results[other_cond]
+                        results, n_shared = mag_results[other_cond]
                         support_text = "✓ YES" if results['hypothesis_supported_mw'] else "✗ NO"
-                        f.write(f"| Active vs {other_cond} | {results['u_stat']:.1f} | "
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['u_stat']:.1f} | "
                                f"{format_pvalue(results['p_mannwhitney'])} | **{support_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Effect size
-                f.write("#### Effect Size: Cohen's d\n\n")
-                f.write("| Comparison | Cohen's d | Interpretation |\n")
-                f.write("|------------|-----------|----------------|\n")
-                
+
+                f.write("#### Paired Non-Parametric Test: Wilcoxon signed-rank (one-tailed)\n\n")
+                f.write("| Comparison | Subjects (paired) | W-stat | p-value | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|------------|\n")
+
                 for other_cond in ['Passive glove', 'No glove']:
                     if other_cond in mag_results:
-                        results = mag_results[other_cond]
-                        f.write(f"| Active vs {other_cond} | {results['cohens_d']:.3f} | "
-                               f"{results['effect_size']} |\n")
-                
+                        results, n_shared = mag_results[other_cond]
+                        support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['w_stat']:.1f} | "
+                               f"{format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+
                 f.write("\n")
-                
-                # ANOVA for 3-way comparison
-                if len(condition_magnitudes) == 3:
-                    f.write("#### ANOVA: Three-way comparison\n\n")
-                    groups = [condition_magnitudes[c] for c in CONDITIONS if c in condition_magnitudes]
-                    f_stat, p_anova = stats.f_oneway(*groups)
-                    f.write(f"**F-statistic:** {f_stat:.3f}  \n")
-                    f.write(f"**p-value:** {format_pvalue(p_anova)}  \n")
-                    
-                    if p_anova < 0.05:
-                        f.write("**Interpretation:** Significant difference exists between conditions\n\n")
-                    else:
-                        f.write("**Interpretation:** No significant difference between conditions\n\n")
-            
-            # ALL PAIRWISE COMPARISONS FOR PCA MAGNITUDE (two-tailed tests)
-            if len(condition_magnitudes) >= 2:
-                f.write("### All Pairwise Comparisons - PCA Magnitude (Two-tailed tests)\n\n")
-                f.write("Comparing all condition pairs for PCA magnitude differences.\n\n")
-                
-                # Define all pairs to compare
+
+                f.write("#### Effect Size: Cohen's d\n\n")
+                f.write("| Comparison | Subjects (paired) | Cohen's d | Interpretation |\n")
+                f.write("|------------|-------------------|-----------|----------------|\n")
+
+                for other_cond in ['Passive glove', 'No glove']:
+                    if other_cond in mag_results:
+                        results, n_shared = mag_results[other_cond]
+                        f.write(f"| Active vs {other_cond} | {n_shared} | {results['cohens_d']:.3f} | {results['effect_size']} |\n")
+
+                f.write("\n")
+
+                if len([m for m in mag_maps.values() if m]) == 3:
+                    groups = [np.array(list(mag_maps[c].values())) for c in CONDITIONS if mag_maps.get(c)]
+                    if all(len(g) > 0 for g in groups):
+                        f.write("#### ANOVA: Three-way comparison\n\n")
+                        f_stat, p_anova = stats.f_oneway(*groups)
+                        f.write(f"**F-statistic:** {f_stat:.3f}  \n")
+                        f.write(f"**p-value:** {format_pvalue(p_anova)}  \n")
+                        if p_anova < 0.05:
+                            f.write("**Interpretation:** Significant difference exists between conditions\n\n")
+                        else:
+                            f.write("**Interpretation:** No significant difference between conditions\n\n")
+
+            if len([m for m in mag_maps.values() if m]) >= 2:
+                f.write("### All Pairwise Comparisons - PCA Magnitude (Two-tailed, subject-paired)\n\n")
+                f.write("Comparing all condition pairs for PCA magnitude differences using subject means.\n\n")
+
                 comparison_pairs = [
                     ('Active glove', 'No glove'),
                     ('Passive glove', 'No glove'),
                     ('Active glove', 'Passive glove')
                 ]
-                
+
                 pairwise_mag_results = {}
-                
-                # Parametric tests
+
                 f.write("#### Parametric Test: Welch's t-test (two-tailed)\n\n")
-                f.write("| Comparison | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
-                f.write("|------------|--------|---------|-----------|----------|--------------|\n")
-                
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|----------|--------------|\n")
+
                 for cond1, cond2 in comparison_pairs:
-                    if cond1 in condition_magnitudes and cond2 in condition_magnitudes:
-                        vals1 = condition_magnitudes[cond1]
-                        vals2 = condition_magnitudes[cond2]
+                    if cond1 in mag_maps and cond2 in mag_maps:
+                        vals1, vals2, shared = build_paired_lists(mag_maps[cond1], mag_maps[cond2])
+                        if not shared:
+                            continue
                         results = test_pairwise_comparison(vals1, vals2, cond1, cond2)
-                        pairwise_mag_results[(cond1, cond2)] = results
-                        
+                        pairwise_mag_results[(cond1, cond2)] = (results, len(shared))
+
                         sig_text = "✓ YES" if results['is_significant_welch'] else "✗ NO"
-                        f.write(f"| {cond1} vs {cond2} | {results['t_stat']:.3f} | "
+                        f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
                                f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Non-parametric tests
+
                 f.write("#### Non-Parametric Test: Mann-Whitney U (two-tailed)\n\n")
-                f.write("| Comparison | U-stat | p-value | Significant? |\n")
-                f.write("|------------|--------|---------|---------------|\n")
-                
+                f.write("| Comparison | Subjects (paired) | U-stat | p-value | Significant? |\n")
+                f.write("|------------|-------------------|--------|---------|---------------|\n")
+
                 for cond1, cond2 in comparison_pairs:
                     if (cond1, cond2) in pairwise_mag_results:
-                        results = pairwise_mag_results[(cond1, cond2)]
+                        results, n_shared = pairwise_mag_results[(cond1, cond2)]
                         sig_text = "✓ YES" if results['is_significant_mw'] else "✗ NO"
-                        f.write(f"| {cond1} vs {cond2} | {results['u_stat']:.1f} | "
+                        f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['u_stat']:.1f} | "
                                f"{format_pvalue(results['p_mannwhitney'])} | **{sig_text}** |\n")
-                
+
                 f.write("\n")
-                
-                # Effect sizes
-                f.write("#### Effect Size: Cohen's d\n\n")
-                f.write("| Comparison | Cohen's d | Interpretation | Direction |\n")
-                f.write("|------------|-----------|----------------|------------|\n")
-                
+
+                f.write("#### Paired Non-Parametric Test: Wilcoxon signed-rank (two-tailed)\n\n")
+                f.write("| Comparison | Subjects (paired) | W-stat | p-value | Significant? |\n")
+                f.write("|------------|-------------------|--------|---------|---------------|\n")
+
                 for cond1, cond2 in comparison_pairs:
                     if (cond1, cond2) in pairwise_mag_results:
-                        results = pairwise_mag_results[(cond1, cond2)]
-                        direction = f"{cond1} > {cond2}" if results['mean_diff'] > 0 else f"{cond1} < {cond2}"
-                        f.write(f"| {cond1} vs {cond2} | {results['cohens_d']:.3f} | "
-                               f"{results['effect_size']} | {direction} |\n")
-                
+                        results, n_shared = pairwise_mag_results[(cond1, cond2)]
+                        sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
+                        f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['w_stat']:.1f} | "
+                               f"{format_pvalue(results['p_wilcoxon'])} | **{sig_text}** |\n")
+
                 f.write("\n")
-            
+
+                f.write("#### Effect Size: Cohen's d\n\n")
+                f.write("| Comparison | Subjects (paired) | Cohen's d | Interpretation | Direction |\n")
+                f.write("|------------|-------------------|-----------|----------------|------------|\n")
+
+                for cond1, cond2 in comparison_pairs:
+                    if (cond1, cond2) in pairwise_mag_results:
+                        results, n_shared = pairwise_mag_results[(cond1, cond2)]
+                        direction = f"{cond1} > {cond2}" if results['mean_diff'] > 0 else f"{cond1} < {cond2}"
+                        f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['cohens_d']:.3f} | "
+                               f"{results['effect_size']} | {direction} |\n")
+
+                f.write("\n")
+
             f.write("---\n\n")
-    
-    # Export PCA values to CSV
+
     import pandas as pd
     csv_path = results_dir / 'pca_values.csv'
     df = pd.DataFrame(csv_data)
     df.to_csv(csv_path, index=False)
     print(f"✓ Saved PCA values CSV: {csv_path}")
-    
+
+    subject_csv_path = results_dir / 'pca_subject_means.csv'
+    df_subject = pd.DataFrame(subject_rows)
+    if not df_subject.empty:
+        df_subject.to_csv(subject_csv_path, index=False)
+        print(f"✓ Saved PCA subject means CSV: {subject_csv_path}")
+
     print(f"✓ Saved PCA statistics: {report_path}")
     return report_path
 
@@ -1024,7 +1368,7 @@ def generate_master_summary():
         f.write("- **Metric:** RMS amplitude per second (normalized by task duration)\n")
         f.write("- **Rationale:** Active tasks take longer but may require lower intensity\n")
         f.write("- **Figures:** `rate_temporal_comparison_object_*.svg`\n")
-        f.write("- **Statistics:** `statistical_summary_rate.md`\n\n")
+        f.write("- **Statistics:** `statistical_summary_activation.md`\n\n")
         
         f.write("### 3. PCA Analysis\n")
         f.write("- **Metric:** Magnitude in PC1-PC2 space\n")
@@ -1083,8 +1427,10 @@ def generate_master_summary():
         f.write("## Summary of Results\n\n")
         f.write("See individual statistical summary files for detailed results:\n\n")
         f.write("1. **Amplitude comparisons:** `statistical_summary_amplitude.md`\n")
-        f.write("2. **Rate-based comparisons:** `statistical_summary_rate.md`\n")
-        f.write("3. **PCA comparisons:** `statistical_summary_pca.md`\n\n")
+        f.write("2. **Rate-based comparisons:** `statistical_summary_activation.md`\n")
+        f.write("3. **Task duration (subject-level):** `statistical_summary_duration.md`\n")
+        f.write("4. **%MVC (subject-level):** `statistical_summary_mvc.md`\n")
+        f.write("5. **PCA comparisons:** `statistical_summary_pca.md`\n\n")
         
         f.write("---\n\n")
         
@@ -1094,9 +1440,10 @@ def generate_master_summary():
         f.write("| `figureB_object_*.svg` | Temporal comparison (RMS) | `statistical_summary_amplitude.md` |\n")
         f.write("| `figureB_summary_object_1.svg` | Amplitude summary | `statistical_summary_amplitude.md` |\n")
         f.write("| `figureD_channels_*.svg` | Channel-wise RMS | `statistical_summary_amplitude.md` |\n")
-        f.write("| `rate_temporal_comparison_object_*.svg` | Rate-based comparison | `statistical_summary_rate.md` |\n")
+        f.write("| `rate_temporal_comparison_object_*.svg` | Rate-based comparison | `statistical_summary_activation.md` |\n")
         f.write("| `figureC_pca_*.svg` | PCA analysis | `statistical_summary_pca.md` |\n")
-        f.write("| `figure_duration_stats.svg` | Task duration | `statistical_summary_rate.md` |\n\n")
+        f.write("| `mvc_duration_box_violin_bar_combined.svg` | Duration + %MVC overview | `statistical_summary_duration.md`, `statistical_summary_mvc.md` |\n")
+        f.write("| `figure_duration_stats.svg` | Task duration | `statistical_summary_duration.md` |\n\n")
         
         f.write("---\n\n")
         f.write("*End of master summary*\n")
@@ -1114,13 +1461,19 @@ if __name__ == '__main__':
     # Generate all statistical summaries
     amp_path = generate_amplitude_statistics()
     print()
-    
+
     activation_path = generate_activation_statistics()
     print()
-    
+
+    duration_path = generate_duration_statistics()
+    print()
+
+    mvc_path = generate_mvc_statistics()
+    print()
+
     pca_path = generate_pca_statistics()
     print()
-    
+
     master_path = generate_master_summary()
     print()
     
@@ -1130,7 +1483,9 @@ if __name__ == '__main__':
     print("\nGenerated files:")
     print(f"  1. {amp_path.name}")
     print(f"  2. {activation_path.name}")
-    print(f"  3. {pca_path.name}")
-    print(f"  4. {master_path.name}")
+    print(f"  3. {duration_path.name}")
+    print(f"  4. {mvc_path.name}")
+    print(f"  5. {pca_path.name}")
+    print(f"  6. {master_path.name}")
     print("\nThese files contain all statistical tests without cluttering figures.")
     print("="*70)

@@ -169,9 +169,27 @@ def summarize_condition_values(
             base_mean = base_stats['mean'] if base_stats['mean'] != 0 else np.nan
             ratio = cond_stats['mean'] / base_mean if base_mean and not np.isnan(base_mean) else np.nan
             p_val = stats.ttest_ind(cond_stats['_values'], base_values, equal_var=False).pvalue
+
+            # Paired nonparametric check (Wilcoxon) using aligned lengths when possible
+            wilcoxon_p = np.nan
+            cond_vals = cond_stats['_values']
+            if cond_vals.size and base_values.size:
+                min_len = min(cond_vals.size, base_values.size)
+                if min_len > 0:
+                    try:
+                        wilcoxon_p = stats.wilcoxon(
+                            cond_vals[:min_len],
+                            base_values[:min_len],
+                            zero_method='wilcox',
+                            alternative='two-sided'
+                        ).pvalue
+                    except ValueError:
+                        wilcoxon_p = np.nan
+
             comparisons[condition] = {
                 'ratio': float(ratio) if ratio == ratio else np.nan,  # NaN-safe
-                'p_value': float(p_val)
+                'p_value': float(p_val),
+                'wilcoxon_p': float(wilcoxon_p) if wilcoxon_p == wilcoxon_p else np.nan
             }
 
     # Drop raw arrays from summary before returning to keep structure light
@@ -201,8 +219,12 @@ def format_stats_text(
         if condition in comparisons:
             comp = comparisons[condition]
             ratio_text = f"{comp['ratio']:.2f}x" if comp['ratio'] == comp['ratio'] else 'n/a'
+            t_p = comp.get('p_value')
+            w_p = comp.get('wilcoxon_p')
+            t_text = f"{t_p:.3e}" if t_p == t_p else 'n/a'
+            w_text = f"{w_p:.3e}" if w_p == w_p else 'n/a'
             lines.append(
-                f"  vs {BASE_CONDITION}: ratio={ratio_text}, p={comp['p_value']:.3e}"
+                f"  vs {BASE_CONDITION}: ratio={ratio_text}, t_p={t_text}, wilcoxon_p={w_text}"
             )
 
     return "\n".join(lines)
@@ -459,7 +481,7 @@ def draw_svg_heatmap(
         c=values_subset,
         cmap=cmap_obj,
         norm=norm,
-        s=layout.radius**2 * 14,
+        s=layout.radius**2 * 8,
         edgecolors='none',
         linewidths=0.0,
         alpha=0.8,
@@ -1067,7 +1089,7 @@ class EMGAnalyzer:
             ax.set_title(f'Ch {ch}', fontsize=9)
             ax.grid(True, alpha=0.2)
             if ch % 4 == 0:
-                ax.set_ylabel('RMS (a.u.)', fontsize=9)
+                ax.set_ylabel('RMS (%MVC)', fontsize=9)
             if ch >= 28:
                 ax.set_xlabel('Normalized Time', fontsize=9)
 
@@ -1177,7 +1199,7 @@ class EMGAnalyzer:
 
         ax.set_title(f'Channel RMS Summary - Object {object_id}', fontsize=16, fontweight='bold')
         ax.set_xlabel('Channel', fontsize=12)
-        ax.set_ylabel('Mean RMS (a.u.)', fontsize=12)
+        ax.set_ylabel('Mean RMS (%MVC)', fontsize=12)
         ax.set_xticks(x)
         ax.set_xticklabels([f'{ch}' for ch in range(NUM_CHANNELS)], rotation=45)
         ax.legend()
@@ -1520,6 +1542,7 @@ class EMGAnalyzer:
         condition_segment_means: Dict[str, List[float]] = defaultdict(list)
         condition_trial_counts: Dict[str, int] = {}
         condition_durations: Dict[str, List[float]] = {}
+        condition_spatial_means: Dict[str, np.ndarray] = {}
         
         # Collect and prepare data
         for condition in CONDITIONS:
@@ -1549,6 +1572,9 @@ class EMGAnalyzer:
             avg_rms = np.mean(resampled_segments, axis=0)
             condition_data[condition] = avg_rms
             condition_durations[condition] = durations
+            # For consistency with time-series and distribution: use the same averaged matrix
+            # Take channel means over the already averaged time x channel matrix
+            condition_spatial_means[condition] = condition_data[condition].mean(axis=0)
         
         if not condition_data:
             print(f"No valid data for object {object_id}")
@@ -1565,24 +1591,31 @@ class EMGAnalyzer:
         fig = plt.figure(figsize=(20, 12))
         gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
         
-        # Row 1: Side-by-side heatmaps for each condition
-        vmin = min(data.min() for data in condition_data.values())
-        vmax = max(data.max() for data in condition_data.values())
-        
+        # Row 1: Spatial heatmaps (subject-averaged channel means) ordered by plot_conditions
+        if condition_spatial_means:
+            layout = get_svg_heatmap_layout()
+            all_spatial_vals = np.concatenate([condition_spatial_means[c] for c in plot_conditions if c in condition_spatial_means])
+            vmin = all_spatial_vals.min()
+            vmax = all_spatial_vals.max()
+        else:
+            layout = None
+            vmin = vmax = None
         for idx, condition in enumerate(plot_conditions):
             ax = fig.add_subplot(gs[0, idx])
-            data = condition_data[condition]
-            
-            im = ax.imshow(data.T, aspect='auto', cmap='hot', interpolation='bilinear',
-                          vmin=vmin, vmax=vmax, origin='lower')
-            ax.set_title(f'{condition}\nMean RMS: {data.mean():.1f} a.u.', 
+            if condition not in condition_spatial_means or layout is None:
+                ax.axis('off')
+                continue
+            sm = draw_svg_heatmap(
+                ax,
+                condition_spatial_means[condition],
+                layout=layout,
+                vmin=vmin,
+                vmax=vmax,
+                cmap='magma'
+            )
+            ax.set_title(f'{condition}\nMean: {condition_spatial_means[condition].mean():.1f} %MVC', 
                         fontsize=14, fontweight='bold')
-            ax.set_xlabel('Time (samples)', fontsize=11)
-            ax.set_ylabel('Channel', fontsize=11)
-            ax.set_yticks(np.arange(0, NUM_CHANNELS, 4))
-            
-            # Add colorbar
-            plt.colorbar(im, ax=ax, label='RMS Amplitude (a.u.)')
+            plt.colorbar(sm, ax=ax, label='Mean RMS (%MVC)')
         
         # Row 2: Channel-wise mean amplitude comparison (bar plot)
         ax_bar = fig.add_subplot(gs[1, :])
@@ -1604,7 +1637,7 @@ class EMGAnalyzer:
             ax_bar.set_ylim(0, bar_max * 1.1 if bar_max > 0 else 1)
         
         ax_bar.set_xlabel('Channel', fontsize=12, fontweight='bold')
-        ax_bar.set_ylabel('Mean RMS Amplitude (a.u.)', fontsize=12, fontweight='bold')
+        ax_bar.set_ylabel('Mean RMS Amplitude (%MVC)', fontsize=12, fontweight='bold')
         ax_bar.set_title('Channel-wise Amplitude Comparison', fontsize=14, fontweight='bold')
         ax_bar.set_xticks(x[::2])
         ax_bar.set_xticklabels([f'{ch}' for ch in range(NUM_CHANNELS)][::2])
@@ -1631,7 +1664,7 @@ class EMGAnalyzer:
         
         ax_violin.set_xticks(range(len(plot_conditions)))
         ax_violin.set_xticklabels(violin_labels, fontsize=12, fontweight='bold')
-        ax_violin.set_ylabel('RMS Amplitude (a.u.)', fontsize=12, fontweight='bold')
+        ax_violin.set_ylabel('RMS Amplitude (%MVC)', fontsize=12, fontweight='bold')
         ax_violin.set_title('Amplitude Distribution Comparison', fontsize=14, fontweight='bold')
         ax_violin.grid(True, alpha=0.3, axis='y')
         if violin_data:
@@ -1786,7 +1819,7 @@ class EMGAnalyzer:
         
         ax1.set_xticks(positions)
         ax1.set_xticklabels(labels, fontsize=12, fontweight='bold')
-        ax1.set_ylabel('RMS Amplitude (a.u.)', fontsize=13, fontweight='bold')
+        ax1.set_ylabel('RMS Amplitude (%MVC)', fontsize=13, fontweight='bold')
         ax1.set_title('Overall Amplitude Distribution', fontsize=14, fontweight='bold')
         ax1.grid(True, alpha=0.3, axis='y')
         ax1.legend(fontsize=10)
@@ -1837,7 +1870,7 @@ class EMGAnalyzer:
         
         ax2.set_xticks(positions2)
         ax2.set_xticklabels(labels2, fontsize=12, fontweight='bold')
-        ax2.set_ylabel('Mean RMS per Segment (a.u.)', fontsize=13, fontweight='bold')
+        ax2.set_ylabel('Mean RMS per Segment (%MVC)', fontsize=13, fontweight='bold')
         ax2.set_title(f'Segment-wise Comparison (n={[len(condition_mean_per_segment[c]) for c in labels2]})', 
                      fontsize=14, fontweight='bold')
         ax2.grid(True, alpha=0.3, axis='y')
@@ -1958,7 +1991,7 @@ class EMGAnalyzer:
             
             # Add mean amplitude annotation
             mean_amp = rms_downsampled.mean()
-            ax.set_title(f'{condition}\nMean: {mean_amp:.1f} a.u.', 
+            ax.set_title(f'{condition}\nMean: {mean_amp:.1f} %MVC', 
                         fontsize=13, fontweight='bold')
             ax.set_xlabel('Time (s)', fontsize=11)
             ax.set_ylabel('Channel', fontsize=11)
@@ -1967,7 +2000,7 @@ class EMGAnalyzer:
             
             # Add colorbar
             cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cbar.set_label('RMS (a.u.)', fontsize=10)
+            cbar.set_label('RMS (%MVC)', fontsize=10)
         
         # Row 2: Difference heatmaps
         comparisons = [
@@ -2008,7 +2041,7 @@ class EMGAnalyzer:
             )
             
             mean_diff = diff_data.mean()
-            ax.set_title(f'Difference: {label}\nMean Δ: {mean_diff:+.1f} a.u.', 
+            ax.set_title(f'Difference: {label}\nMean Δ: {mean_diff:+.1f} %MVC', 
                         fontsize=12, fontweight='bold')
             ax.set_xlabel('Time (s)', fontsize=11)
             ax.set_ylabel('Channel', fontsize=11)
@@ -2016,7 +2049,7 @@ class EMGAnalyzer:
             ax.set_yticklabels(np.arange(0, NUM_CHANNELS, 4))
             
             cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cbar.set_label('Δ RMS (a.u.)', fontsize=10)
+            cbar.set_label('Δ RMS (%MVC)', fontsize=10)
         
         fig.suptitle(f'EMG Activity Heatmap Comparison - Object {object_id}', 
                     fontsize=16, fontweight='bold')
@@ -2090,9 +2123,9 @@ class EMGAnalyzer:
                 cmap='magma'
             )
             
-            ax.set_title(f'{condition}\nMean: {condition_means[condition].mean():.1f} a.u.', 
+            ax.set_title(f'{condition}\nMean: {condition_means[condition].mean():.1f} %MVC', 
                         fontsize=13, fontweight='bold')
-            plt.colorbar(sm, ax=ax, label='Mean RMS (a.u.)')
+            plt.colorbar(sm, ax=ax, label='Mean RMS (%MVC)')
         
         # Row 2: Example from one subject
         for idx, condition in enumerate(CONDITIONS):
@@ -2109,9 +2142,9 @@ class EMGAnalyzer:
                 cmap='magma'
             )
             
-            ax.set_title(f'Example Subject\nMean: {condition_examples[condition].mean():.1f} a.u.', 
+            ax.set_title(f'Example Subject\nMean: {condition_examples[condition].mean():.1f} %MVC', 
                         fontsize=12, fontweight='bold')
-            plt.colorbar(sm, ax=ax, label='RMS (a.u.)')
+            plt.colorbar(sm, ax=ax, label='RMS (%MVC)')
 
         fig.text(0.02, 0.74, 'MEAN\n(All Subjects)', fontsize=11, fontweight='bold', va='center')
         fig.text(0.02, 0.32, 'EXAMPLE\n(1 Subject)', fontsize=11, fontweight='bold', va='center')
@@ -2395,7 +2428,7 @@ class EMGAnalyzer:
 
                 ax.set_xticks(bars_positions)
                 ax.set_xticklabels([cond for cond in present_conditions], rotation=15, ha='right')
-                ax.set_ylabel(f'{component_name} Score (a.u.)', fontsize=11)
+                ax.set_ylabel(f'{component_name} Score (%MVC)', fontsize=11)
 
                 if row_idx == 0:
                     ax.set_title(f'Object {obj_id}\n{variance_text[row_idx]}', fontsize=13, fontweight='bold')
@@ -2493,6 +2526,12 @@ class EMGAnalyzer:
             raw_path = self.results_dir / 'time_consumption_durations.csv'
             df.to_csv(raw_path, index=False)
             print(f"Saved raw durations: {raw_path}")
+
+            # Subject-level means for paired stats/plots
+            duration_subject_df = self._aggregate_subject_duration(data_dict, object_ids)
+            duration_subject_path = self.results_dir / 'time_consumption_subject_means.csv'
+            duration_subject_df.to_csv(duration_subject_path, index=False)
+            print(f"Saved subject-level durations: {duration_subject_path}")
             
             # Create visualization
             self._plot_time_consumption(df)
@@ -2527,6 +2566,120 @@ class EMGAnalyzer:
         
         save_path = self.results_dir / 'time_consumption_comparison.svg'
         plt.savefig(save_path, bbox_inches='tight', format='svg')
+        print(f"Saved: {save_path}")
+        plt.close()
+
+    def _aggregate_subject_duration(self, data_dict: Dict[str, Dict[int, List[SegmentRecord]]],
+                                    object_ids: List[int]) -> pd.DataFrame:
+        """Compute mean duration per subject per object per condition."""
+        rows = []
+        for condition in CONDITIONS:
+            if condition not in data_dict:
+                continue
+            for obj_id in object_ids:
+                if obj_id not in data_dict[condition]:
+                    continue
+                per_subject: Dict[str, List[float]] = defaultdict(list)
+                for record in data_dict[condition][obj_id]:
+                    per_subject[record.subject].append(self._segment_duration(record))
+                for subject, vals in per_subject.items():
+                    rows.append({
+                        'Condition': condition,
+                        'Object': obj_id,
+                        'Subject': subject,
+                        'Duration (s)': float(np.mean(vals))
+                    })
+        return pd.DataFrame(rows)
+
+    def _aggregate_subject_mvc(self, data_dict: Dict[str, Dict[int, List[SegmentRecord]]],
+                               object_ids: List[int]) -> pd.DataFrame:
+        """Compute mean %MVC per subject per object per condition."""
+        rows = []
+        for condition in CONDITIONS:
+            if condition not in data_dict:
+                continue
+            for obj_id in object_ids:
+                if obj_id not in data_dict[condition]:
+                    continue
+                per_subject: Dict[str, List[float]] = defaultdict(list)
+                for record in data_dict[condition][obj_id]:
+                    segment = self._normalize_segment(record.samples, record.subject)
+                    rms = self.compute_rms(segment, window_ms=100)
+                    per_subject[record.subject].append(float(np.mean(rms)))
+                for subject, vals in per_subject.items():
+                    rows.append({
+                        'Condition': condition,
+                        'Object': obj_id,
+                        'Subject': subject,
+                        '%MVC': float(np.mean(vals))
+                    })
+        return pd.DataFrame(rows)
+
+    def _plot_mvc_duration_combined(self, duration_df: pd.DataFrame, mvc_df: pd.DataFrame,
+                                    object_ids: List[int], condition_order: List[str]):
+        """Combined figure: duration box/violin + %MVC bars."""
+        if duration_df.empty or mvc_df.empty:
+            print("Skipping combined duration/%MVC plot (no data)")
+            return
+
+        fig, axes = plt.subplots(1, 3, figsize=(20, 6))
+
+        # Panel 1: Duration box by condition (subject means)
+        ax = axes[0]
+        dur_plot = duration_df.copy()
+        dur_plot['Condition'] = pd.Categorical(dur_plot['Condition'], categories=condition_order, ordered=True)
+        sns.boxplot(data=dur_plot, x='Condition', y='Duration (s)', order=condition_order,
+                    palette=CONDITION_COLORS, ax=ax)
+        ax.set_title('Duration by Condition (subject means)', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Duration (seconds)', fontsize=12)
+        ax.set_xlabel('Condition', fontsize=12)
+        ax.grid(True, alpha=0.3, axis='y')
+
+        # Panel 2: Duration violin by object/condition (subject means)
+        ax = axes[1]
+        sns.violinplot(data=dur_plot, x='Object', y='Duration (s)', hue='Condition',
+                       order=sorted(duration_df['Object'].unique()),
+                       palette=CONDITION_COLORS, ax=ax)
+        ax.set_title('Duration by Object and Condition', fontsize=14, fontweight='bold')
+        ax.set_ylabel('Duration (seconds)', fontsize=12)
+        ax.set_xlabel('Object ID', fontsize=12)
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.legend(title='Condition', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        # Panel 3: %MVC grouped bars (subject means)
+        ax = axes[2]
+        mvc_plot = mvc_df.copy()
+        mvc_plot['Condition'] = pd.Categorical(mvc_plot['Condition'], categories=condition_order, ordered=True)
+
+        summary = mvc_plot.groupby(['Object', 'Condition'])['%MVC'].agg(['mean', 'std']).reset_index()
+        objects = sorted(mvc_plot['Object'].unique())
+        x = np.arange(len(objects))
+        width = 0.25
+        for i, condition in enumerate(condition_order):
+            cond_data = summary[summary['Condition'] == condition]
+            means = []
+            stds = []
+            for obj in objects:
+                row = cond_data[cond_data['Object'] == obj]
+                means.append(row['mean'].values[0] if len(row) else 0)
+                stds.append(row['std'].values[0] if len(row) else 0)
+            offset = (i - 1) * width
+            ax.bar(x + offset, means, width, yerr=stds, label=condition,
+                   color=CONDITION_COLORS.get(condition, '#333'), capsize=3,
+                   alpha=0.85, edgecolor='black', linewidth=0.5)
+
+        ax.set_xlabel('Object', fontsize=12)
+        ax.set_ylabel('%MVC (subject mean)', fontsize=12)
+        ax.set_title('%MVC by Object and Condition', fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'Object {i}' for i in objects], fontsize=11)
+        ax.legend(fontsize=10, loc='upper right')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(bottom=0)
+
+        plt.tight_layout()
+        save_path = self.results_dir / 'mvc_duration_box_violin_bar_combined.svg'
+        plt.savefig(save_path, bbox_inches='tight', format='svg', dpi=150)
         print(f"Saved: {save_path}")
         plt.close()
 
@@ -2585,6 +2738,17 @@ class EMGAnalyzer:
             save_path = self.results_dir / 'mvc_by_object_analysis.csv'
             summary.to_csv(save_path, index=False)
             print(f"\nSaved: {save_path}")
+            
+            # Subject-level means for paired stats/plots
+            mvc_subject_df = self._aggregate_subject_mvc(data_dict, object_ids)
+            mvc_subject_path = self.results_dir / 'mvc_by_object_subject_means.csv'
+            mvc_subject_df.to_csv(mvc_subject_path, index=False)
+            print(f"Saved subject-level %MVC: {mvc_subject_path}")
+            
+            # Also collect subject-level durations to build combined figure
+            duration_subject_df = self._aggregate_subject_duration(data_dict, object_ids)
+            # Combined duration + %MVC figure
+            self._plot_mvc_duration_combined(duration_subject_df, mvc_subject_df, object_ids, condition_order)
             
             # Create visualization
             self._plot_mvc_by_object(df, condition_order)

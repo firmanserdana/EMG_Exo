@@ -112,7 +112,7 @@ def create_temporal_comparison_per_object(data_dict, analyzer, results_dir):
                    linewidth=2.5, alpha=0.85, color=color)
         
         ax.set_xlabel('Time (s)', fontsize=13, fontweight='bold')
-        ax.set_ylabel('Mean Absolute RMS (a.u.)', fontsize=13, fontweight='bold')
+        ax.set_ylabel('Mean Absolute RMS (%MVC)', fontsize=13, fontweight='bold')
         ax.set_title(f'Temporal Comparison - Object {obj_id}', fontsize=15, fontweight='bold')
         ax.legend(fontsize=11, frameon=True, loc='best')
         ax.grid(True, alpha=0.3)
@@ -204,11 +204,11 @@ def create_spatial_heatmap_single_subject(data_dict, analyzer, results_dir, obj_
             vmax=vmax,
             cmap='magma'
         )
-        ax.set_title(f'{condition} - Mean RMS: {channel_rms.mean():.1f} a.u.',
+        ax.set_title(f'{condition} - Mean RMS: {channel_rms.mean():.1f} %MVC',
                     fontsize=14, fontweight='bold')
 
     # Shared colorbar
-    fig.colorbar(sm, ax=axes, label='RMS Amplitude (a.u.)', shrink=0.8, pad=0.02)
+    fig.colorbar(sm, ax=axes, label='RMS Amplitude (%MVC)', shrink=0.8, pad=0.02)
     stats_conditions, summary_stats, comparisons = summarize_condition_values(condition_segment_means)
     stats_text = format_stats_text(stats_conditions, summary_stats, comparisons)
     if stats_text:

@@ -120,7 +120,7 @@ def create_rate_based_temporal_comparison():
                    linewidth=2.5, alpha=0.85, color=color)
         
         ax1.set_xlabel('Time (s)', fontsize=13, fontweight='bold')
-        ax1.set_ylabel('Mean RMS Rate (a.u./sec)', fontsize=13, fontweight='bold')
+        ax1.set_ylabel('Mean RMS Rate (%MVC/sec)', fontsize=13, fontweight='bold')
         ax1.set_title(f'Muscle Activation Rate - Object {obj_id}', fontsize=15, fontweight='bold')
         ax1.legend(fontsize=11, frameon=True, loc='best')
         ax1.grid(True, alpha=0.3)
@@ -188,7 +188,7 @@ def create_rate_based_temporal_comparison():
         
         ax2.set_xticks(positions)
         ax2.set_xticklabels(labels, rotation=20, ha='right')
-        ax2.set_ylabel('Mean RMS Rate (a.u./sec)', fontsize=12, fontweight='bold')
+        ax2.set_ylabel('Mean RMS Rate (%MVC/sec)', fontsize=12, fontweight='bold')
         ax2.set_title('Average Muscle Activation Rate', fontsize=13, fontweight='bold')
         ax2.grid(True, alpha=0.3, axis='y')
         
