@@ -1,10 +1,8 @@
-
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
-#ifndef LED_BUILTIN
-#define LED_BUILTIN 2 // default onboard LED for most ESP32 dev kits
-#endif
+// FireBeetle ESP32 板载LED
+#define LED_BUILTIN 2
 
 // ======================================================
 //                Button Bridge Configuration
@@ -16,24 +14,24 @@ const char *WIFI_PASSWORD = "12345678";
 const IPAddress GLOVE_HOST_IP(192, 168, 4, 1);
 const uint16_t GLOVE_UDP_PORT = 4211;
 const uint16_t LOCAL_UDP_PORT = 0; // 0 lets the stack pick a free port
-const uint32_t WIFI_RECONNECT_INTERVAL_MS = 1000; // 减少到1秒，原来是5秒
+const uint32_t WIFI_RECONNECT_INTERVAL_MS = 1000;
 
 // Optional UART forwarding to the main ESP32
 const bool SERIAL_BRIDGE_ENABLED = true;
 HardwareSerial &BRIDGE_SERIAL = Serial1;
-const int SERIAL_TX_PIN = 17; // Bridge TX -> ESP32 RX2 (GPIO35)
-const int SERIAL_RX_PIN = 16; // Optional, only if acknowledgements are required
+const int SERIAL_TX_PIN = 16; // FireBeetle D9 -> Glove RX
+const int SERIAL_RX_PIN = 17; // FireBeetle D10 -> Glove TX (optional)
 const uint32_t SERIAL_BAUD_RATE = 115200;
 
-// Button wiring
-const int BUTTON_PIN = 12;             // Adjust to suit your bridge board
-const bool BUTTON_ACTIVE_LOW = true;   // Board pulls the pin LOW when pressed
-const bool USE_INTERNAL_PULLUP = true; // Uses INPUT_PULLUP if true
-const uint32_t BUTTON_DEBOUNCE_MS = 30; // 减少到30ms，原来是40ms
+// Button wiring - FireBeetle ESP32 specific
+const int BUTTON_PIN = 25;             // FireBeetle GPIO25 (D2引脚)
+const bool BUTTON_ACTIVE_LOW = true;   // Button pulls pin LOW when pressed
+const bool USE_INTERNAL_PULLUP = true; // Uses INPUT_PULLUP
+const uint32_t BUTTON_DEBOUNCE_MS = 30;
 
-// Status LED (optional)
+// Status LED - FireBeetle onboard LED
 const bool STATUS_LED_ENABLED = true;
-const int STATUS_LED_PIN = LED_BUILTIN;
+const int STATUS_LED_PIN = LED_BUILTIN; // FireBeetle板载LED (GPIO2)
 
 // Command behaviour
 const bool SEND_PRESS_COMMAND = true; // Sends BTN:PRESS on falling edge
@@ -143,7 +141,7 @@ void ensureWifi()
     delay(100);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     
-    // 等待连接最多3秒
+    // Wait for connection up to 3 seconds
     unsigned long startAttempt = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 3000)
     {
@@ -164,7 +162,7 @@ void ensureWifi()
 
 void sendCommand(const char *command)
 {
-    // 优先发送UDP（更快）
+    // Priority 1: Send UDP (faster)
     if (WIFI_BRIDGE_ENABLED && wifiConnected)
     {
         udp.beginPacket(GLOVE_HOST_IP, GLOVE_UDP_PORT);
@@ -173,12 +171,12 @@ void sendCommand(const char *command)
         udp.endPacket();
     }
 
-    // 然后发送Serial
+    // Priority 2: Send Serial
     if (SERIAL_BRIDGE_ENABLED)
     {
         BRIDGE_SERIAL.print(command);
         BRIDGE_SERIAL.print('\n');
-        BRIDGE_SERIAL.flush(); // 确保立即发送
+        BRIDGE_SERIAL.flush(); // Ensure immediate transmission
     }
 
     logLine("[BRIDGE] Sent command -> " + String(command));
@@ -233,44 +231,52 @@ void setup()
 {
     Serial.begin(115200);
     delay(500);
-    logLine("\n=== Button Bridge (Optimized) ===");
+    logLine("\n=== Button Bridge for FireBeetle ESP32 ===");
+    logLine("[BRIDGE] Board: DFRobot FireBeetle ESP32");
+    logLine("[BRIDGE] Button Pin: GPIO25 (D2)");
 
+    // Initialize button pin with internal pullup
     if (USE_INTERNAL_PULLUP)
     {
         pinMode(BUTTON_PIN, BUTTON_ACTIVE_LOW ? INPUT_PULLUP : INPUT_PULLDOWN);
+        logLine("[BRIDGE] Button configured with internal pullup on GPIO25");
     }
     else
     {
         pinMode(BUTTON_PIN, INPUT);
     }
 
+    // Initialize status LED
     if (STATUS_LED_ENABLED)
     {
         pinMode(STATUS_LED_PIN, OUTPUT);
         digitalWrite(STATUS_LED_PIN, LOW);
+        logLine("[BRIDGE] Status LED enabled on GPIO2 (onboard LED)");
     }
 
+    // Initialize serial bridge if enabled
     if (SERIAL_BRIDGE_ENABLED)
     {
         BRIDGE_SERIAL.begin(SERIAL_BAUD_RATE, SERIAL_8N1, SERIAL_RX_PIN, SERIAL_TX_PIN);
         logLine("[BRIDGE] Serial forwarding enabled @" + String(SERIAL_BAUD_RATE));
+        logLine("[BRIDGE] TX: GPIO16 (D9), RX: GPIO17 (D10)");
     }
     else
     {
         logLine("[BRIDGE] Serial forwarding disabled");
     }
 
+    // Initialize WiFi if enabled
     if (WIFI_BRIDGE_ENABLED)
     {
-        // WiFi配置优化
         logLine("[BRIDGE] Configuring WiFi...");
-        WiFi.persistent(false); // 不保存WiFi配置到flash，加快连接
+        WiFi.persistent(false); // Don't save WiFi config to flash
         WiFi.setAutoReconnect(true);
         
         logLine("[BRIDGE] Target SSID: " + String(WIFI_SSID));
         logLine("[BRIDGE] Target IP: " + GLOVE_HOST_IP.toString());
         logLine("[BRIDGE] Waiting 2 seconds for AP to be ready...");
-        delay(2000); // 等待手套的AP启动完成
+        delay(2000); // Wait for glove AP to start
         
         ensureWifi();
     }
@@ -279,24 +285,25 @@ void setup()
         logLine("[BRIDGE] WiFi forwarding disabled");
     }
 
-    logLine("[BRIDGE] Ready. Waiting for button events...");
+    logLine("[BRIDGE] Setup complete. Ready for button events...");
+    logLine("[BRIDGE] Press the button to test!");
 }
 
 void loop()
 {
-    // 优先级1: 按钮检测（最高优先级）
+    // Priority 1: Button detection (highest priority)
     pollButton();
     
-    // 优先级2: WiFi连接维护（在按钮检测之后）
+    // Priority 2: WiFi connection maintenance
     ensureWifi();
     
-    // 优先级3: LED状态更新（最低优先级）
+    // Priority 3: LED status update (lowest priority)
     updateStatusLed();
 
-    // 减少心跳日志频率，避免阻塞
+    // Reduce heartbeat log frequency to avoid blocking
     static unsigned long lastHeartbeat = 0;
     unsigned long now = millis();
-    if (now - lastHeartbeat > 30000) // 改为30秒
+    if (now - lastHeartbeat > 30000) // 30 seconds
     {
         lastHeartbeat = now;
         if (WIFI_BRIDGE_ENABLED)
@@ -306,5 +313,5 @@ void loop()
         }
     }
     
-    // 不添加任何delay，保持loop最快响应
+    // No delay() - keep loop responsive
 }
