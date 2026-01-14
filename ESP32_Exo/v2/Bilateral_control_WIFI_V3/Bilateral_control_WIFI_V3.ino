@@ -43,7 +43,7 @@ ControlModeLock mode_lock = AUTO_MODE;
 
 int gesture = 0;
 int pressure[2] = {50, 50};
-int speed = 0;
+int speed = 1;
 String finger_states = "000000";
 
 const char *GESTURE_TO_FINGER_STATES_MAP[] = {
@@ -59,7 +59,6 @@ Adafruit_MCP4728 dac;
 bool dac_available = false;
 
 bool tcp_connected = false;
-bool tcp_server_started = false;
 unsigned long last_tcp_command = 0;
 const unsigned long tcp_timeout = 20000;
 char tcp_command_buffer[256];
@@ -67,8 +66,14 @@ int tcp_buffer_idx = 0;
 
 bool status_changed = true;
 
+// STA connection state variables - NEW: for manual connection
+bool sta_connecting = false;
+bool sta_connect_requested = false;
+unsigned long sta_connect_start = 0;
+const unsigned long sta_connect_timeout = 15000;  // 15 seconds timeout
+
 unsigned long last_button_press = 0;
-const unsigned long button_debounce_delay = 150; // 减少到150ms
+const unsigned long button_debounce_delay = 200;
 int button_gestures[3] = {1, 2, 0};
 int button_cycle_mode = 2;
 int button_cycle_position = 0;
@@ -83,43 +88,7 @@ unsigned long last_button_bridge_wifi_activity = 0;
 unsigned long last_button_bridge_activity = 0;
 String last_button_bridge_source = "none";
 
-// ==================== 新增：命令队列防止堵塞 ====================
-struct Command {
-    enum Type { NONE, BUTTON, TCP, WEB } type;
-    String data;
-    unsigned long timestamp;
-};
-
-const int COMMAND_QUEUE_SIZE = 10;
-Command commandQueue[COMMAND_QUEUE_SIZE];
-int queueHead = 0;
-int queueTail = 0;
-int queueCount = 0;
-
-bool enqueueCommand(Command::Type type, const String& data) {
-    if (queueCount >= COMMAND_QUEUE_SIZE) {
-        Serial.println("WARNING: Command queue full!");
-        return false;
-    }
-    commandQueue[queueTail].type = type;
-    commandQueue[queueTail].data = data;
-    commandQueue[queueTail].timestamp = millis();
-    queueTail = (queueTail + 1) % COMMAND_QUEUE_SIZE;
-    queueCount++;
-    return true;
-}
-
-bool dequeueCommand(Command& cmd) {
-    if (queueCount == 0) {
-        return false;
-    }
-    cmd = commandQueue[queueHead];
-    queueHead = (queueHead + 1) % COMMAND_QUEUE_SIZE;
-    queueCount--;
-    return true;
-}
-
-// ==================== HTML Page (保持不变) ====================
+// ==================== HTML Page ====================
 const char *html_page = R"rawliteral(
 <!DOCTYPE HTML>
 <html>
@@ -139,6 +108,8 @@ const char *html_page = R"rawliteral(
         .btn-secondary { background: #6c757d; color: white; }
         .btn-secondary:hover { background: #545b62; }
         .btn-danger { background: #dc3545; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-success:hover { background: #218838; }
         .control-row { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; }
         input[type="number"] { width: 80px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center; }
         input[type="text"] { padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center; }
@@ -154,6 +125,7 @@ const char *html_page = R"rawliteral(
         .status-dot { width: 10px; height: 10px; border-radius: 50%; }
         .status-online { background: #28a745; }
         .status-offline { background: #dc3545; }
+        .status-connecting { background: #ffc107; }
         .realtime-display { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; border-radius: 10px; margin: 15px 0; }
         .gesture-display { font-size: 20px; font-weight: bold; margin: 8px 0; }
         .btn-config { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 10px 0; }
@@ -166,7 +138,7 @@ const char *html_page = R"rawliteral(
 </head>
 <body>
     <div class="container">
-        <h1>ESP32 Glove Control (Optimized)</h1>
+        <h1>ESP32 Glove Control</h1>
         
         <div class="section">
             <h3>System Status</h3>
@@ -180,7 +152,8 @@ const char *html_page = R"rawliteral(
                 <div class="connection-status">
                     <span>STA:</span>
                     <div id="sta-dot" class="status-dot status-offline"></div>
-                    <span id="sta-status">Connecting...</span>
+                    <span id="sta-status">Disconnected</span>
+                    <button id="sta-connect-btn" class="btn-success" onclick="connectSTA()" style="margin-left: 10px; padding: 4px 8px; font-size: 11px;">Connect</button>
                 </div>
                 <div class="connection-status">
                     <span>TCP:</span>
@@ -260,8 +233,8 @@ const char *html_page = R"rawliteral(
                         <option value="4">LateralGrasp</option>
                         <option value="5">ThumbFlex</option>
                         <option value="6">IndexFlex</option>
-                        <option value="7">TripodGrasp</option>
-                        <option value="8">SoftHandClose</option>
+                        <option value="7">MRPFlex</option>
+                        <option value="8">IndexPoint</option>
                     </select>
                 </div>
                 <div class="pos-card" id="position-1-card">
@@ -274,8 +247,8 @@ const char *html_page = R"rawliteral(
                         <option value="4">LateralGrasp</option>
                         <option value="5">ThumbFlex</option>
                         <option value="6">IndexFlex</option>
-                        <option value="7">TripodGrasp</option>
-                        <option value="8">SoftHandClose</option>
+                        <option value="7">MRPFlex</option>
+                        <option value="8">IndexPoint</option>
                     </select>
                 </div>
                 <div class="pos-card" id="position-2-card">
@@ -288,19 +261,20 @@ const char *html_page = R"rawliteral(
                         <option value="4">LateralGrasp</option>
                         <option value="5">ThumbFlex</option>
                         <option value="6">IndexFlex</option>
-                        <option value="7">TripodGrasp</option>
-                        <option value="8">SoftHandClose</option>
+                        <option value="7">MRPFlex</option>
+                        <option value="8">IndexPoint</option>
                     </select>
                 </div>
             </div>
 
             <div class="pos-current">
-                Current Position: <span id="current-position">0</span>
+                Current: <span id="current-position">0</span>
+                <button class="btn-secondary" onclick="resetButtonCycle()" style="margin-left: 10px;">Reset</button>
             </div>
         </div>
 
         <div class="section">
-            <h3>Gestures</h3>
+            <h3>Gesture Control</h3>
             <div class="button-group">
                 <button class="btn-primary" onclick="setGesture(0)">Relax</button>
                 <button class="btn-primary" onclick="setGesture(1)">HandClose</button>
@@ -309,637 +283,869 @@ const char *html_page = R"rawliteral(
                 <button class="btn-primary" onclick="setGesture(4)">LateralGrasp</button>
                 <button class="btn-primary" onclick="setGesture(5)">ThumbFlex</button>
                 <button class="btn-primary" onclick="setGesture(6)">IndexFlex</button>
-                <button class="btn-primary" onclick="setGesture(7)">TripodGrasp</button>
-                <button class="btn-primary" onclick="setGesture(8)">SoftHandClose</button>
+                <button class="btn-primary" onclick="setGesture(7)">MRPFlex</button>
+                <button class="btn-primary" onclick="setGesture(8)">IndexPoint</button>
             </div>
         </div>
 
         <div class="section">
-            <h3>Pressure Control</h3>
+            <h3>Manual Control</h3>
             <div class="control-row">
-                <label>Flexion:</label>
+                <label>Flex Pressure (0-100):</label>
                 <input type="number" id="flex-pressure" min="0" max="100" value="50">
-                <button class="btn-primary" onclick="setPressure()">Set</button>
+                <button class="btn-secondary" onclick="setPressure()">Set</button>
             </div>
             <div class="control-row">
-                <label>Extension:</label>
+                <label>Ext Pressure (0-100):</label>
                 <input type="number" id="ext-pressure" min="0" max="100" value="50">
             </div>
-        </div>
-
-        <div class="section">
-            <h3>Speed Control</h3>
-            <div class="button-group">
-                <button class="btn-secondary" onclick="setSpeed(0)">Stop (0)</button>
-                <button class="btn-primary" onclick="setSpeed(1)">Slow (1)</button>
-                <button class="btn-primary" onclick="setSpeed(2)">Medium (2)</button>
-                <button class="btn-primary" onclick="setSpeed(3)">Fast (3)</button>
-                <button class="btn-primary" onclick="setSpeed(4)">V.Fast (4)</button>
-            </div>
-        </div>
-
-        <div class="section">
-            <h3>Manual Finger Control</h3>
             <div class="control-row">
-                <label>Finger States (6 digits, 0-3):</label>
-                <input type="text" id="finger-states" value="000000" maxlength="6">
-                <button class="btn-primary" onclick="setFingerStates()">Set</button>
+                <label>Speed (0-4):</label>
+                <input type="number" id="speed-level" min="0" max="4" value="1">
+                <button class="btn-secondary" onclick="setSpeed()">Set</button>
             </div>
-            <p style="font-size: 11px; color: #666; margin: 8px 0;">
-                0=Relax, 1=Flex, 2=Extend, 3=Pinch | Positions: Thumb, Index, Middle, Ring, Pinky, Abd/Add
-            </p>
+            <div class="control-row">
+                <label>Finger States (6 digits):</label>
+                <input type="text" id="finger-states" maxlength="6" value="000000" style="width: 100px;">
+                <button class="btn-secondary" onclick="setFingerStates()">Set</button>
+            </div>
         </div>
 
         <div class="section">
-            <button class="btn-danger" onclick="emergencyStop()" style="width: 100%; padding: 15px; font-size: 16px;">
-                EMERGENCY STOP
-            </button>
+            <h3>Emergency</h3>
+            <button class="btn-danger" onclick="emergencyStop()" style="font-size: 16px; padding: 12px 24px;">EMERGENCY STOP</button>
         </div>
     </div>
 
     <script>
-        function setGesture(g) {
-            fetch('/set?gesture=' + g).then(response => response.text()).then(data => updateStatus());
+        const gestureNames = ["Relax", "HandClose", "HandOpen", "HookGrasp", "LateralGrasp", "ThumbFlex", "IndexFlex", "MRPFlex", "IndexPoint"];
+        
+        function updateStatus() {
+            fetch('/status')
+                .then(response => response.json())
+                .then(data => {
+                    const modeElement = document.getElementById('mode-status');
+                    if (data.mode === 'TCP') {
+                        modeElement.className = 'mode-indicator mode-tcp';
+                        modeElement.textContent = 'TCP Mode';
+                    } else if (data.mode === 'BUTTON') {
+                        modeElement.className = 'mode-indicator mode-web';
+                        modeElement.textContent = 'Button Mode';
+                    } else {
+                        modeElement.className = 'mode-indicator mode-web';
+                        modeElement.textContent = 'Web Mode';
+                    }
+                    
+                    document.getElementById('button-mode-config').style.display = data.mode === 'BUTTON' ? 'block' : 'none';
+                    
+                    const staDot = document.getElementById('sta-dot');
+                    const staStatus = document.getElementById('sta-status');
+                    const staBtn = document.getElementById('sta-connect-btn');
+                    
+                    if (data.sta_connecting) {
+                        staDot.className = 'status-dot status-connecting';
+                        staStatus.textContent = 'Connecting...';
+                        staBtn.disabled = true;
+                        staBtn.textContent = 'Connecting...';
+                    } else if (data.sta_connected) {
+                        staDot.className = 'status-dot status-online';
+                        staStatus.textContent = data.sta_ip;
+                        staBtn.disabled = true;
+                        staBtn.textContent = 'Connected';
+                        staBtn.className = 'btn-secondary';
+                    } else {
+                        staDot.className = 'status-dot status-offline';
+                        staStatus.textContent = 'Disconnected';
+                        staBtn.disabled = false;
+                        staBtn.textContent = 'Connect';
+                        staBtn.className = 'btn-success';
+                    }
+                    
+                    const tcpDot = document.getElementById('tcp-dot');
+                    const tcpStatus = document.getElementById('tcp-status');
+                    if (data.tcp_connected) {
+                        tcpDot.className = 'status-dot status-online';
+                        tcpStatus.textContent = 'Connected';
+                    } else {
+                        tcpDot.className = 'status-dot status-offline';
+                        tcpStatus.textContent = 'Waiting...';
+                    }
+                    
+                    const buttonBridgeDot = document.getElementById('button-bridge-dot');
+                    const buttonBridgeStatus = document.getElementById('button-bridge-status');
+                    if (data.button_bridge) {
+                        const serialActive = !!data.button_bridge.serial_active;
+                        const wifiActive = !!data.button_bridge.wifi_active;
+                        const active = serialActive || wifiActive;
+                        buttonBridgeDot.className = 'status-dot ' + (active ? 'status-online' : 'status-offline');
+                        if (active) {
+                            const channels = [];
+                            if (serialActive) channels.push('Serial');
+                            if (wifiActive) channels.push('WiFi');
+                            buttonBridgeStatus.textContent = channels.join('+');
+                        } else {
+                            buttonBridgeStatus.textContent = 'No activity';
+                        }
+                    }
+                    
+                    document.getElementById('current-gesture').textContent = gestureNames[data.gesture] || 'Unknown';
+                    document.getElementById('current-flex').textContent = data.pressure[0];
+                    document.getElementById('current-ext').textContent = data.pressure[1];
+                    document.getElementById('current-speed').textContent = data.speed;
+                    document.getElementById('current-fingers').textContent = data.finger_states;
+                    document.getElementById('current-mode').textContent = data.mode;
+                    document.getElementById('mode-lock-status').textContent = data.mode_lock;
+                    document.getElementById('flex-pressure').value = data.pressure[0];
+                    document.getElementById('ext-pressure').value = data.pressure[1];
+                    document.getElementById('speed-level').value = data.speed;
+                    document.getElementById('finger-states').value = data.finger_states;
+
+                    if (data.button_config) {
+                        const config = data.button_config;
+                        document.getElementById('button-cycle-mode').value = String(config.cycle_mode);
+                        
+                        for (let i = 0; i < 3; i++) {
+                            const select = document.getElementById('gesture-pos-' + i);
+                            if (select && config.gestures && config.gestures[i] !== undefined) {
+                                select.value = String(config.gestures[i]);
+                            }
+                            
+                            const card = document.getElementById('position-' + i + '-card');
+                            if (card) {
+                                if (config.position === i) {
+                                    card.classList.add('active');
+                                } else {
+                                    card.classList.remove('active');
+                                }
+                            }
+                        }
+                        
+                        document.getElementById('current-position').textContent = config.position;
+                        document.getElementById('position-2-card').style.opacity = config.cycle_mode === 3 ? '1' : '0.5';
+                    }
+                })
+                .catch(error => console.log('Update failed'));
         }
-        function setPressure() {
-            const flex = document.getElementById('flex-pressure').value;
-            const ext = document.getElementById('ext-pressure').value;
-            fetch('/set?pressure=' + flex + ':' + ext).then(response => response.text()).then(data => updateStatus());
+
+        function sendCommand(endpoint, params = '') {
+            const url = params ? `/${endpoint}?${params}` : `/${endpoint}`;
+            return fetch(url).then(response => response.text());
         }
-        function setSpeed(s) {
-            fetch('/set?speed=' + s).then(response => response.text()).then(data => updateStatus());
+        
+        function connectSTA() {
+            sendCommand('sta-connect').then(() => setTimeout(updateStatus, 100));
         }
+        
+        function setGesture(id) { sendCommand('gesture', `value=${id}`); }
+        function setPressure() { sendCommand('pressure', `flex=${document.getElementById('flex-pressure').value}&ext=${document.getElementById('ext-pressure').value}`); }
+        function setSpeed() { sendCommand('speed', `value=${document.getElementById('speed-level').value}`); }
         function setFingerStates() {
             const states = document.getElementById('finger-states').value;
-            fetch('/set?fingerstates=' + states).then(response => response.text()).then(data => updateStatus());
+            if (states.length === 6 && /^[0-3]+$/.test(states)) {
+                sendCommand('fingers', `value=${states}`);
+            } else {
+                alert('Must be 6 digits (0-3)');
+            }
         }
-        function emergencyStop() {
-            fetch('/stop').then(response => response.text()).then(data => updateStatus());
-        }
-        function setControlMode(mode) {
-            fetch('/set_mode?mode=' + mode).then(response => response.text()).then(data => updateStatus());
-        }
-        function setButtonCycleMode() {
-            const mode = document.getElementById('button-cycle-mode').value;
-            fetch('/set_button?cycle_mode=' + mode).then(response => response.text()).then(data => updateStatus());
-        }
-        function setPositionGesture(pos) {
-            const gesture = document.getElementById('gesture-pos-' + pos).value;
-            fetch('/set_button?position=' + pos + '&gesture=' + gesture).then(response => response.text()).then(data => updateStatus());
-        }
+        function emergencyStop() { sendCommand('stop'); }
+        function setControlMode(mode) { sendCommand('mode', `value=${mode}`).then(() => setTimeout(updateStatus, 100)); }
+        function setButtonCycleMode() { sendCommand('button-cycle-mode', `value=${document.getElementById('button-cycle-mode').value}`).then(() => setTimeout(updateStatus, 100)); }
+        function setPositionGesture(position) { sendCommand('button-position', `pos=${position}&gesture=${document.getElementById('gesture-pos-' + position).value}`).then(() => setTimeout(updateStatus, 100)); }
+        function resetButtonCycle() { sendCommand('button-reset').then(() => setTimeout(updateStatus, 100)); }
 
-        function updateStatus() {
-            fetch('/status').then(response => response.json()).then(data => {
-                document.getElementById('current-gesture').textContent = getGestureName(data.gesture);
-                document.getElementById('current-flex').textContent = data.pressure_flex;
-                document.getElementById('current-ext').textContent = data.pressure_ext;
-                document.getElementById('current-speed').textContent = data.speed;
-                document.getElementById('current-fingers').textContent = data.finger_states;
-                document.getElementById('current-mode').textContent = data.control_mode;
-                document.getElementById('mode-lock-status').textContent = data.mode_lock;
-                document.getElementById('current-position').textContent = data.button_position;
-
-                const modeStatus = document.getElementById('mode-status');
-                modeStatus.textContent = data.control_mode + ' Mode';
-                modeStatus.className = 'mode-indicator mode-' + data.control_mode.toLowerCase();
-
-                document.getElementById('sta-status').textContent = data.sta_status;
-                document.getElementById('sta-dot').className = 'status-dot ' + (data.sta_connected ? 'status-online' : 'status-offline');
-                document.getElementById('tcp-status').textContent = data.tcp_status;
-                document.getElementById('tcp-dot').className = 'status-dot ' + (data.tcp_connected ? 'status-online' : 'status-offline');
-                document.getElementById('button-bridge-status').textContent = data.button_bridge_status;
-                document.getElementById('button-bridge-dot').className = 'status-dot ' + (data.button_bridge_active ? 'status-online' : 'status-offline');
-
-                document.getElementById('button-cycle-mode').value = data.button_cycle_mode;
-                document.getElementById('gesture-pos-0').value = data.button_gestures[0];
-                document.getElementById('gesture-pos-1').value = data.button_gestures[1];
-                document.getElementById('gesture-pos-2').value = data.button_gestures[2];
-
-                for (let i = 0; i < 3; i++) {
-                    const card = document.getElementById('position-' + i + '-card');
-                    if (i == data.button_position) {
-                        card.classList.add('active');
-                    } else {
-                        card.classList.remove('active');
-                    }
-                }
-
-                const btnConfig = document.getElementById('button-mode-config');
-                if (data.control_mode === 'BUTTON' || data.mode_lock === 'FORCE_BUTTON_MODE') {
-                    btnConfig.style.display = 'block';
-                } else {
-                    btnConfig.style.display = 'none';
-                }
-            });
-        }
-
-        function getGestureName(g) {
-            const names = ['Relax', 'HandClose', 'HandOpen', 'HookGrasp', 'LateralGrasp', 'ThumbFlex', 'IndexFlex', 'TripodGrasp', 'SoftHandClose'];
-            return names[g] || 'Unknown';
-        }
-
-        setInterval(updateStatus, 500);
+        setInterval(updateStatus, 1000);
         updateStatus();
     </script>
 </body>
-</html>
-)rawliteral";
+</html>)rawliteral";
 
-// ==================== Helper Functions (保持不变) ====================
-int sanitizeGestureId(int g)
+// ==================== Function Declarations ====================
+void initHardware();
+void initNetworks();
+void initDAC();
+void initButtonBridge();
+void handleWebRequests();
+void handleTCPCommands();
+void handleSTAConnection();
+void pollButtonBridgeInterfaces();
+void processButtonCommand(const String &command, const char *source);
+void advanceButtonCycle(const char *source);
+void setButtonPosition(int position, const char *source);
+void applyButtonGesture(const char *source);
+int sanitizeGestureId(int gestureId);
+bool extractButtonCommandValue(const String &normalized, int &value);
+void updateActuators();
+void gestureToFingerStates();
+void setFingerStates();
+void setPressureDAC();
+void setSpeedDAC();
+void parseAndExecuteTCPCommand(String command);
+void emergencyStop();
+
+// ==================== Main Program ====================
+void setup()
 {
-    if (g < 0 || g >= NUM_GESTURES)
-    {
-        return 0;
-    }
-    return g;
+    Serial.begin(115200);
+    delay(500);
+
+    Serial.println("\n=== ESP32 Glove Control System V4 ===");
+    Serial.println("Initializing...");
+
+    initHardware();
+    initNetworks();
+    initButtonBridge();
+    initDAC();
+
+    Serial.println("=== System Ready ===");
+    Serial.println("Web Interface: 192.168.4.1");
+    Serial.print("TCP Server (AP): ");
+    Serial.print(WiFi.softAPIP());
+    Serial.print(":");
+    Serial.println(tcp_port);
+    Serial.println("STA: Manual connection via web interface");
+    Serial.println("====================");
 }
 
-String getModeName(ControlMode mode)
+void loop()
 {
-    switch (mode)
+    // Emergency stop check (highest priority)
+    if (digitalRead(emergency_pin) == LOW)
     {
-    case WEB_MODE:
-        return "WEB";
-    case TCP_MODE:
-        return "TCP";
-    case BUTTON_MODE:
-        return "BUTTON";
-    default:
-        return "UNKNOWN";
-    }
-}
-
-String getModeLockName(ControlModeLock lock)
-{
-    switch (lock)
-    {
-    case AUTO_MODE:
-        return "AUTO";
-    case FORCE_WEB_MODE:
-        return "FORCE_WEB_MODE";
-    case FORCE_TCP_MODE:
-        return "FORCE_TCP_MODE";
-    case FORCE_BUTTON_MODE:
-        return "FORCE_BUTTON_MODE";
-    default:
-        return "UNKNOWN";
-    }
-}
-
-// ==================== Web Server Handlers (保持不变但优化) ====================
-void handleRoot()
-{
-    server.send(200, "text/html", html_page);
-}
-
-void handleSet()
-{
-    if (control_mode != WEB_MODE && mode_lock == AUTO_MODE)
-    {
-        server.send(403, "text/plain", "ERROR: Not in WEB mode");
+        emergencyStop();
+        delay(100);
         return;
     }
 
-    if (server.hasArg("gesture"))
+    // Handle all communication interfaces (non-blocking)
+    server.handleClient();
+    handleTCPCommands();
+    handleSTAConnection();  // NEW: Non-blocking STA connection handler
+    
+    // Button bridge polling (fast response)
+    pollButtonBridgeInterfaces();
+
+    // TCP timeout management
+    if (tcp_connected && (millis() - last_tcp_command > tcp_timeout))
     {
-        int newGesture = server.arg("gesture").toInt();
-        newGesture = sanitizeGestureId(newGesture);
-        gesture = newGesture;
-        Serial.println("WEB: Set gesture " + String(gesture));
+        Serial.println("TCP timeout");
+        tcp_connected = false;
+        if (mode_lock == AUTO_MODE) control_mode = WEB_MODE;
+        tcpClient.stop();
         status_changed = true;
     }
 
-    if (server.hasArg("pressure"))
+    if (tcp_connected && !tcpClient.connected())
     {
-        String pressureArg = server.arg("pressure");
-        int colonIndex = pressureArg.indexOf(':');
-        if (colonIndex > 0)
+        Serial.println("TCP disconnected");
+        tcp_connected = false;
+        if (mode_lock == AUTO_MODE) control_mode = WEB_MODE;
+        tcpClient.stop();
+        status_changed = true;
+    }
+
+    // Update actuators
+    updateActuators();
+
+    // Minimal delay for stability (reduced from 5ms)
+    delay(2);
+}
+
+// ==================== Hardware Initialization ====================
+void initHardware()
+{
+    Serial.println("Init hardware...");
+
+    for (int i = 0; i < 5; i++)
+    {
+        pinMode(flexion_pins[i], OUTPUT);
+        pinMode(extension_pins[i], OUTPUT);
+        pinMode(pinching_pins[i], OUTPUT);
+        digitalWrite(flexion_pins[i], LOW);
+        digitalWrite(extension_pins[i], LOW);
+        digitalWrite(pinching_pins[i], LOW);
+    }
+
+    pinMode(abduction_pin, OUTPUT);
+    pinMode(adduction_pin, OUTPUT);
+    pinMode(emergency_pin, INPUT_PULLUP);
+    digitalWrite(abduction_pin, LOW);
+    digitalWrite(adduction_pin, LOW);
+
+    Serial.println("Hardware OK");
+}
+
+// ==================== Button Bridge ====================
+void initButtonBridge()
+{
+    Serial.println("Init button bridge...");
+
+    if (button_bridge_serial_enabled)
+    {
+        button_serial.begin(115200, SERIAL_8N1, button_serial_rx_pin, button_serial_tx_pin);
+        button_serial_buffer_idx = 0;
+        Serial.printf("  Serial RX:%d TX:%d\n", button_serial_rx_pin, button_serial_tx_pin);
+    }
+
+    if (button_bridge_wifi_enabled)
+    {
+        button_udp_initialized = button_udp.begin(button_udp_port);
+        if (button_udp_initialized)
         {
-            int flex = constrain(pressureArg.substring(0, colonIndex).toInt(), 0, 100);
-            int ext = constrain(pressureArg.substring(colonIndex + 1).toInt(), 0, 100);
-            pressure[0] = flex;
-            pressure[1] = ext;
-            Serial.println("WEB: Set pressure " + String(pressure[0]) + ":" + String(pressure[1]));
-            status_changed = true;
+            Serial.printf("  UDP port %d\n", button_udp_port);
         }
     }
 
-    if (server.hasArg("speed"))
-    {
-        speed = constrain(server.arg("speed").toInt(), 0, 4);
-        Serial.println("WEB: Set speed " + String(speed));
-        status_changed = true;
-    }
+    Serial.println("Button bridge OK");
+}
 
-    if (server.hasArg("fingerstates"))
+void pollButtonBridgeInterfaces()
+{
+    // Serial bridge (high priority)
+    if (button_bridge_serial_enabled)
     {
-        String stateArg = server.arg("fingerstates");
-        if (stateArg.length() == 6)
+        while (button_serial.available())
         {
-            bool valid = true;
-            for (int i = 0; i < 6; i++)
+            char c = button_serial.read();
+            if (c == '\r' || c == '\n')
             {
-                if (stateArg.charAt(i) < '0' || stateArg.charAt(i) > '3')
+                if (button_serial_buffer_idx > 0)
                 {
-                    valid = false;
-                    break;
+                    button_serial_buffer[button_serial_buffer_idx] = '\0';
+                    processButtonCommand(String(button_serial_buffer), "SERIAL");
+                    button_serial_buffer_idx = 0;
                 }
             }
-            if (valid)
+            else if (button_serial_buffer_idx < sizeof(button_serial_buffer) - 1)
             {
-                finger_states = stateArg;
-                Serial.println("WEB: Set finger states " + finger_states);
-                status_changed = true;
+                button_serial_buffer[button_serial_buffer_idx++] = c;
             }
         }
     }
 
-    server.send(200, "text/plain", "OK");
-}
-
-void handleStop()
-{
-    emergencyStop();
-    server.send(200, "text/plain", "EMERGENCY STOP ACTIVATED");
-}
-
-void handleStatus()
-{
-    StaticJsonDocument<1024> doc;
-
-    doc["gesture"] = gesture;
-    doc["pressure_flex"] = pressure[0];
-    doc["pressure_ext"] = pressure[1];
-    doc["speed"] = speed;
-    doc["finger_states"] = finger_states;
-    doc["control_mode"] = getModeName(control_mode);
-    doc["mode_lock"] = getModeLockName(mode_lock);
-
-    doc["sta_connected"] = (WiFi.status() == WL_CONNECTED);
-    if (WiFi.status() == WL_CONNECTED)
+    // UDP bridge
+    if (button_bridge_wifi_enabled && button_udp_initialized)
     {
-        doc["sta_status"] = WiFi.localIP().toString();
-    }
-    else
-    {
-        doc["sta_status"] = "Disconnected";
+        int packetSize = button_udp.parsePacket();
+        if (packetSize > 0)
+        {
+            char udp_buffer[64];
+            int len = button_udp.read(udp_buffer, sizeof(udp_buffer) - 1);
+            if (len > 0)
+            {
+                udp_buffer[len] = '\0';
+                processButtonCommand(String(udp_buffer), "UDP");
+            }
+        }
     }
 
-    doc["tcp_connected"] = tcp_connected;
-    doc["tcp_status"] = tcp_connected ? "Connected" : "Waiting...";
+    // Activity timeout tracking
+    unsigned long now = millis();
+    if (button_bridge_serial_enabled && last_button_bridge_serial_activity > 0 && 
+        now - last_button_bridge_serial_activity > button_bridge_activity_timeout)
+    {
+        last_button_bridge_serial_activity = 0;
+    }
+    if (button_bridge_wifi_enabled && last_button_bridge_wifi_activity > 0 && 
+        now - last_button_bridge_wifi_activity > button_bridge_activity_timeout)
+    {
+        last_button_bridge_wifi_activity = 0;
+    }
+    if (last_button_bridge_activity > 0 && now - last_button_bridge_activity > button_bridge_activity_timeout)
+    {
+        last_button_bridge_activity = 0;
+        last_button_bridge_source = "none";
+    }
+}
+
+bool extractButtonCommandValue(const String &normalized, int &value)
+{
+    int delimiterIndex = normalized.indexOf(':');
+    if (delimiterIndex < 0) delimiterIndex = normalized.indexOf('=');
+    if (delimiterIndex < 0) delimiterIndex = normalized.indexOf(' ');
+
+    if (delimiterIndex > 0 && delimiterIndex < normalized.length() - 1)
+    {
+        value = normalized.substring(delimiterIndex + 1).toInt();
+        return true;
+    }
+    return false;
+}
+
+void processButtonCommand(const String &rawCommand, const char *source)
+{
+    String command = rawCommand;
+    command.trim();
+    if (command.length() == 0) return;
 
     unsigned long now = millis();
-    bool button_bridge_active = (now - last_button_bridge_activity) < button_bridge_activity_timeout;
-    doc["button_bridge_active"] = button_bridge_active;
-    if (button_bridge_active)
+    last_button_bridge_activity = now;
+    last_button_bridge_source = source;
+
+    if (strcmp(source, "SERIAL") == 0)
     {
-        doc["button_bridge_status"] = "Active (" + last_button_bridge_source + ")";
+        last_button_bridge_serial_activity = now;
     }
-    else
+    else if (strcmp(source, "UDP") == 0)
     {
-        doc["button_bridge_status"] = "Inactive";
+        last_button_bridge_wifi_activity = now;
     }
 
-    doc["button_cycle_mode"] = button_cycle_mode;
-    JsonArray gestures = doc.createNestedArray("button_gestures");
-    for (int i = 0; i < 3; i++)
+    String normalized = command;
+    normalized.toUpperCase();
+    if (normalized.startsWith("BTN:"))
     {
-        gestures.add(button_gestures[i]);
+        normalized.remove(0, 4);
     }
-    doc["button_position"] = button_cycle_position;
 
-    String response;
-    serializeJson(doc, response);
-    server.send(200, "application/json", response);
-}
+    bool recognized = false;
 
-void handleSetMode()
-{
-    if (server.hasArg("mode"))
+    if (normalized == "PRESS" || normalized == "P" || normalized == "TOGGLE")
     {
-        String modeArg = server.arg("mode");
-        if (modeArg == "WEB")
+        recognized = true;
+        advanceButtonCycle(source);
+    }
+    else if (normalized.startsWith("POSITION") || normalized.startsWith("POS"))
+    {
+        recognized = true;
+        int position = -1;
+        if (extractButtonCommandValue(normalized, position))
         {
-            mode_lock = FORCE_WEB_MODE;
-            control_mode = WEB_MODE;
+            if (position >= 0 && position <= 2)
+            {
+                setButtonPosition(position, source);
+            }
         }
-        else if (modeArg == "TCP")
-        {
-            mode_lock = FORCE_TCP_MODE;
-            control_mode = TCP_MODE;
-        }
-        else if (modeArg == "BUTTON")
-        {
-            mode_lock = FORCE_BUTTON_MODE;
-            control_mode = BUTTON_MODE;
-        }
-        else if (modeArg == "AUTO")
-        {
-            mode_lock = AUTO_MODE;
-        }
-        Serial.println("Mode lock set to: " + getModeLockName(mode_lock));
+    }
+    else if (normalized == "RESET")
+    {
+        recognized = true;
+        setButtonPosition(0, source);
+    }
+
+    if (recognized)
+    {
         status_changed = true;
     }
-    server.send(200, "text/plain", "OK");
 }
 
-void handleSetButton()
+void advanceButtonCycle(const char *source)
 {
-    if (server.hasArg("cycle_mode"))
+    if (control_mode != BUTTON_MODE)
     {
-        int newMode = server.arg("cycle_mode").toInt();
-        if (newMode == 2 || newMode == 3)
-        {
-            button_cycle_mode = newMode;
-            Serial.println("Button cycle mode set to: " + String(button_cycle_mode));
-            status_changed = true;
-        }
+        Serial.printf("[BTN][%s] Ignored - not in BUTTON mode\n", source);
+        return;
     }
 
-    if (server.hasArg("position") && server.hasArg("gesture"))
-    {
-        int pos = server.arg("position").toInt();
-        int gest = server.arg("gesture").toInt();
-        if (pos >= 0 && pos < 3)
-        {
-            button_gestures[pos] = sanitizeGestureId(gest);
-            Serial.println("Position " + String(pos) + " set to gesture " + String(button_gestures[pos]));
-            status_changed = true;
-        }
-    }
-
-    server.send(200, "text/plain", "OK");
-}
-
-void handleNotFound()
-{
-    server.send(404, "text/plain", "Not Found");
-}
-
-// ==================== 修改后的按钮处理函数 ====================
-void handleButtonPress()
-{
     unsigned long now = millis();
     if (now - last_button_press < button_debounce_delay)
     {
-        Serial.println("Button debounce, ignored");
         return;
     }
     last_button_press = now;
 
-    Serial.println("Button press detected! Cycle position: " + String(button_cycle_position));
-
-    gesture = button_gestures[button_cycle_position];
-    Serial.println("Button: Set gesture to " + String(gesture));
-
-    button_cycle_position++;
-    if (button_cycle_position >= button_cycle_mode)
+    int next_position;
+    if (button_cycle_mode == 2)
     {
-        button_cycle_position = 0;
-    }
-
-    status_changed = true;
-}
-
-// ==================== 优化后的按钮消息检查函数 ====================
-void checkButtonBridgeSerial()
-{
-    if (!button_bridge_serial_enabled)
-    {
-        return;
-    }
-
-    // 快速读取所有可用字节
-    while (button_serial.available())
-    {
-        char c = button_serial.read();
-
-        if (c == '\n' || c == '\r')
-        {
-            if (button_serial_buffer_idx > 0)
-            {
-                button_serial_buffer[button_serial_buffer_idx] = '\0';
-                String message = String(button_serial_buffer);
-                message.trim();
-
-                if (message.length() > 0)
-                {
-                    Serial.println("Serial RX: " + message);
-                    
-                    // 立即加入队列
-                    if (enqueueCommand(Command::BUTTON, message)) {
-                        last_button_bridge_serial_activity = millis();
-                        last_button_bridge_activity = last_button_bridge_serial_activity;
-                        last_button_bridge_source = "serial";
-                    }
-                }
-                button_serial_buffer_idx = 0;
-            }
-        }
-        else if (button_serial_buffer_idx < sizeof(button_serial_buffer) - 1)
-        {
-            button_serial_buffer[button_serial_buffer_idx++] = c;
-        }
-        else
-        {
-            Serial.println("Serial buffer overflow!");
-            button_serial_buffer_idx = 0;
-        }
-    }
-}
-
-void checkButtonBridgeWifi()
-{
-    if (!button_bridge_wifi_enabled)
-    {
-        return;
-    }
-
-    if (!button_udp_initialized)
-    {
-        if (button_udp.begin(button_udp_port))
-        {
-            button_udp_initialized = true;
-            Serial.println("Button UDP initialized on port " + String(button_udp_port));
-        }
-        return;
-    }
-
-    // 快速读取所有UDP包
-    int packetSize = button_udp.parsePacket();
-    while (packetSize > 0)
-    {
-        char packetBuffer[256];
-        int len = button_udp.read(packetBuffer, sizeof(packetBuffer) - 1);
-        if (len > 0)
-        {
-            packetBuffer[len] = '\0';
-            String message = String(packetBuffer);
-            message.trim();
-
-            if (message.length() > 0)
-            {
-                Serial.println("UDP RX: " + message);
-                
-                // 立即加入队列
-                if (enqueueCommand(Command::BUTTON, message)) {
-                    last_button_bridge_wifi_activity = millis();
-                    last_button_bridge_activity = last_button_bridge_wifi_activity;
-                    last_button_bridge_source = "wifi";
-                }
-            }
-        }
-        
-        // 检查下一个包
-        packetSize = button_udp.parsePacket();
-    }
-}
-
-// ==================== 新增：处理命令队列 ====================
-void processCommandQueue()
-{
-    // 每次循环处理多个命令以清空队列
-    for (int i = 0; i < 3 && queueCount > 0; i++) {
-        Command cmd;
-        if (dequeueCommand(cmd)) {
-            String message = cmd.data;
-            
-            if (message.startsWith("BTN:PRESS") || message == "BTN:ON")
-            {
-                handleButtonPress();
-            }
-            else if (message == "BTN:OFF")
-            {
-                // 可选：处理按钮释放
-            }
-            else
-            {
-                Serial.println("Unknown button command: " + message);
-            }
-        }
-    }
-}
-
-// ==================== Control Mode Management (保持不变) ====================
-void updateControlMode()
-{
-    if (mode_lock != AUTO_MODE)
-    {
-        switch (mode_lock)
-        {
-        case FORCE_WEB_MODE:
-            control_mode = WEB_MODE;
-            break;
-        case FORCE_TCP_MODE:
-            control_mode = TCP_MODE;
-            break;
-        case FORCE_BUTTON_MODE:
-            control_mode = BUTTON_MODE;
-            break;
-        default:
-            break;
-        }
-        return;
-    }
-
-    unsigned long now = millis();
-    bool button_active = (now - last_button_bridge_activity) < button_bridge_activity_timeout;
-    bool tcp_active = tcp_connected && ((now - last_tcp_command) < tcp_timeout);
-
-    if (button_active)
-    {
-        control_mode = BUTTON_MODE;
-    }
-    else if (tcp_active)
-    {
-        control_mode = TCP_MODE;
+        next_position = (button_cycle_position == 0) ? 1 : 0;
     }
     else
     {
-        control_mode = WEB_MODE;
+        next_position = (button_cycle_position + 1) % 3;
+    }
+
+    setButtonPosition(next_position, source);
+}
+
+void setButtonPosition(int position, const char *source)
+{
+    position = constrain(position, 0, 2);
+    
+    if (button_cycle_mode == 2 && position > 1)
+    {
+        position = 0;
+    }
+
+    button_cycle_position = position;
+    applyButtonGesture(source);
+    status_changed = true;
+
+    Serial.printf("[BTN][%s] Pos=%d\n", source, button_cycle_position);
+}
+
+void applyButtonGesture(const char *source)
+{
+    if (control_mode == BUTTON_MODE)
+    {
+        int target_gesture = sanitizeGestureId(button_gestures[button_cycle_position]);
+        if (gesture != target_gesture)
+        {
+            gesture = target_gesture;
+            Serial.printf("[BTN][%s] Gesture=%d\n", source, gesture);
+        }
     }
 }
 
-// ==================== TCP Client Handling (保持不变但优化) ====================
-void checkTcpClient()
+int sanitizeGestureId(int gestureId)
 {
-    if (!tcp_server_started)
+    return constrain(gestureId, 0, NUM_GESTURES - 1);
+}
+
+// ==================== Network Initialization (OPTIMIZED) ====================
+void initNetworks()
+{
+    Serial.println("Init networks...");
+
+    // Start AP mode only (fast startup)
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(ap_ssid, ap_password);
+    Serial.print("AP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // Start TCP server immediately on AP
+    tcpServer.begin();
+    tcpServer.setNoDelay(true);
+    Serial.println("TCP server ready");
+
+    // Setup web server endpoints
+    server.on("/", []() { server.send(200, "text/html", html_page); });
+
+    // NEW: STA connection endpoint
+    server.on("/sta-connect", []()
     {
-        return;
-    }
-
-    if (!tcpClient || !tcpClient.connected())
-    {
-        if (tcp_connected)
+        if (!sta_connecting && WiFi.status() != WL_CONNECTED)
         {
-            Serial.println("TCP client disconnected");
-            tcp_connected = false;
-            status_changed = true;
+            sta_connect_requested = true;
+            Serial.println("Web: STA connection requested");
+            server.send(200, "text/plain", "Connecting...");
         }
-
-        WiFiClient newClient = tcpServer.available();
-        if (newClient)
+        else if (WiFi.status() == WL_CONNECTED)
         {
-            if (tcpClient)
-            {
-                tcpClient.stop();
-            }
-            tcpClient = newClient;
-            tcp_connected = true;
-            tcp_buffer_idx = 0;
-            last_tcp_command = millis();
-            Serial.println("New TCP client connected from " + tcpClient.remoteIP().toString());
-            status_changed = true;
-        }
-        return;
-    }
-
-    // 快速读取所有可用数据
-    while (tcpClient.available())
-    {
-        char c = tcpClient.read();
-
-        if (c == '\n' || c == '\r')
-        {
-            if (tcp_buffer_idx > 0)
-            {
-                tcp_command_buffer[tcp_buffer_idx] = '\0';
-                String command = String(tcp_command_buffer);
-                command.trim();
-
-                if (command.length() > 0)
-                {
-                    Serial.println("TCP RX: " + command);
-                    
-                    // TCP命令立即处理（不使用队列）
-                    processTcpCommand(command);
-                    last_tcp_command = millis();
-                }
-                tcp_buffer_idx = 0;
-            }
-        }
-        else if (tcp_buffer_idx < sizeof(tcp_command_buffer) - 1)
-        {
-            tcp_command_buffer[tcp_buffer_idx++] = c;
+            server.send(200, "text/plain", "Already connected");
         }
         else
         {
-            Serial.println("TCP buffer overflow!");
-            tcpClient.println("ERROR: Command too long");
-            tcp_buffer_idx = 0;
+            server.send(200, "text/plain", "Connection in progress");
+        }
+    });
+
+    server.on("/status", []()
+    {
+        StaticJsonDocument<1024> json_doc;
+        char json_buffer[1024];
+
+        json_doc["mode"] = (control_mode == TCP_MODE ? "TCP" : 
+                           (control_mode == BUTTON_MODE ? "BUTTON" : "WEB"));
+        json_doc["mode_lock"] = (mode_lock == AUTO_MODE ? "AUTO" : 
+                                (mode_lock == FORCE_WEB_MODE ? "FORCE_WEB" : 
+                                (mode_lock == FORCE_TCP_MODE ? "FORCE_TCP" : "FORCE_BUTTON")));
+        json_doc["sta_connected"] = (WiFi.status() == WL_CONNECTED);
+        json_doc["sta_connecting"] = sta_connecting;  // NEW
+        json_doc["sta_ip"] = WiFi.localIP().toString();
+        json_doc["tcp_connected"] = tcp_connected;
+        json_doc["tcp_client_ip"] = (tcp_connected ? tcpClient.remoteIP().toString() : "none");
+        json_doc["gesture"] = gesture;
+        
+        JsonArray pressure_array = json_doc.createNestedArray("pressure");
+        pressure_array.add(pressure[0]);
+        pressure_array.add(pressure[1]);
+        
+        json_doc["speed"] = speed;
+        json_doc["finger_states"] = finger_states;
+
+        bool serialActive = button_bridge_serial_enabled && last_button_bridge_serial_activity > 0 && 
+                           (millis() - last_button_bridge_serial_activity) <= button_bridge_activity_timeout;
+        bool wifiActive = button_bridge_wifi_enabled && last_button_bridge_wifi_activity > 0 && 
+                         (millis() - last_button_bridge_wifi_activity) <= button_bridge_activity_timeout;
+
+        JsonObject buttonBridge = json_doc.createNestedObject("button_bridge");
+        buttonBridge["serial_active"] = serialActive;
+        buttonBridge["wifi_active"] = wifiActive;
+        buttonBridge["last_source"] = last_button_bridge_source;
+        buttonBridge["last_ms"] = (last_button_bridge_activity > 0) ? (millis() - last_button_bridge_activity) : -1;
+
+        JsonObject buttonConfig = json_doc.createNestedObject("button_config");
+        JsonArray gesturesArray = buttonConfig.createNestedArray("gestures");
+        for (int i = 0; i < 3; i++)
+        {
+            gesturesArray.add(button_gestures[i]);
+        }
+        buttonConfig["cycle_mode"] = button_cycle_mode;
+        buttonConfig["position"] = button_cycle_position;
+
+        serializeJson(json_doc, json_buffer);
+        server.send(200, "application/json", json_buffer); 
+    });
+
+    server.on("/gesture", []()
+    {
+        if (control_mode == WEB_MODE && server.hasArg("value")) {
+            gesture = sanitizeGestureId(server.arg("value").toInt());
+            Serial.println("Web: gesture=" + String(gesture));
+            status_changed = true;
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/pressure", []()
+    {
+        if (control_mode == WEB_MODE && server.hasArg("flex") && server.hasArg("ext")) {
+            pressure[0] = constrain(server.arg("flex").toInt(), 0, 100);
+            pressure[1] = constrain(server.arg("ext").toInt(), 0, 100);
+            Serial.printf("Web: pressure=%d:%d\n", pressure[0], pressure[1]);
+            status_changed = true;
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/speed", []()
+    {
+        if (control_mode == WEB_MODE && server.hasArg("value")) {
+            speed = constrain(server.arg("value").toInt(), 0, 4);
+            Serial.println("Web: speed=" + String(speed));
+            status_changed = true;
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/fingers", []()
+    {
+        if (control_mode == WEB_MODE && server.hasArg("value")) {
+            String states = server.arg("value");
+            if (states.length() == 6) {
+                finger_states = states;
+                Serial.println("Web: fingers=" + finger_states);
+                status_changed = true;
+            }
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/mode", []()
+    {
+        if (server.hasArg("value")) {
+            String mode = server.arg("value");
+            mode.toUpperCase();
+            
+            if (mode == "WEB") {
+                mode_lock = FORCE_WEB_MODE;
+                control_mode = WEB_MODE;
+                if (tcp_connected) {
+                    tcpClient.stop();
+                    tcp_connected = false;
+                }
+                setButtonPosition(0, "WEB");
+                Serial.println("Web: Mode=FORCE_WEB");
+            }
+            else if (mode == "TCP") {
+                mode_lock = FORCE_TCP_MODE;
+                control_mode = TCP_MODE;
+                setButtonPosition(0, "WEB");
+                Serial.println("Web: Mode=FORCE_TCP");
+            }
+            else if (mode == "BUTTON") {
+                mode_lock = FORCE_BUTTON_MODE;
+                control_mode = BUTTON_MODE;
+                if (tcp_connected) {
+                    tcpClient.stop();
+                    tcp_connected = false;
+                }
+                setButtonPosition(0, "WEB");
+                applyButtonGesture("WEB");
+                Serial.println("Web: Mode=FORCE_BUTTON");
+            }
+            else if (mode == "AUTO") {
+                mode_lock = AUTO_MODE;
+                control_mode = tcp_connected ? TCP_MODE : WEB_MODE;
+                if (control_mode != BUTTON_MODE) {
+                    setButtonPosition(0, "WEB");
+                }
+                Serial.println("Web: Mode=AUTO");
+            }
+            status_changed = true;
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/stop", []()
+    {
+        emergencyStop();
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/button-cycle-mode", []()
+    {
+        if (server.hasArg("value")) {
+            int mode = server.arg("value").toInt();
+            if (mode == 2 || mode == 3) {
+                button_cycle_mode = mode;
+                if (button_cycle_mode == 2 && button_cycle_position > 1) {
+                    setButtonPosition(0, "WEB");
+                }
+                Serial.printf("Web: Cycle mode=%d\n", button_cycle_mode);
+                status_changed = true;
+            }
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/button-position", []()
+    {
+        if (server.hasArg("pos") && server.hasArg("gesture")) {
+            int pos = server.arg("pos").toInt();
+            int gest = server.arg("gesture").toInt();
+            if (pos >= 0 && pos <= 2) {
+                button_gestures[pos] = sanitizeGestureId(gest);
+                Serial.printf("Web: Pos %d = gesture %d\n", pos, button_gestures[pos]);
+                if (control_mode == BUTTON_MODE && button_cycle_position == pos) {
+                    applyButtonGesture("WEB");
+                }
+                status_changed = true;
+            }
+        }
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.on("/button-reset", []()
+    {
+        setButtonPosition(0, "WEB");
+        status_changed = true;
+        server.send(200, "text/plain", "OK"); 
+    });
+
+    server.begin();
+    Serial.println("Web server ready");
+}
+
+// ==================== STA Connection Handler (NEW - NON-BLOCKING) ====================
+void handleSTAConnection()
+{
+    // Check if connection was requested
+    if (sta_connect_requested && !sta_connecting)
+    {
+        sta_connecting = true;
+        sta_connect_start = millis();
+        sta_connect_requested = false;
+        
+        Serial.println("Starting STA connection...");
+        WiFi.mode(WIFI_AP_STA);  // Switch to dual mode
+        WiFi.begin(sta_ssid, sta_password);
+    }
+
+    // Handle ongoing connection attempt (non-blocking)
+    if (sta_connecting)
+    {
+        wl_status_t status = WiFi.status();
+        
+        if (status == WL_CONNECTED)
+        {
+            sta_connecting = false;
+            Serial.println("STA connected!");
+            Serial.print("STA IP: ");
+            Serial.println(WiFi.localIP());
+            
+            // TCP server is already running, it will now accept on both interfaces
+        }
+        else if (millis() - sta_connect_start > sta_connect_timeout)
+        {
+            sta_connecting = false;
+            Serial.println("STA connection timeout");
+            WiFi.mode(WIFI_AP);  // Revert to AP-only mode
+        }
+        // Otherwise, connection is still in progress (non-blocking)
+    }
+}
+
+// ==================== DAC Initialization ====================
+void initDAC()
+{
+    Serial.println("Init DAC...");
+    Wire.begin(sda_pin, scl_pin);
+
+    if (dac.begin())
+    {
+        dac_available = true;
+        dac.setChannelValue(MCP4728_CHANNEL_A, 0);
+        dac.setChannelValue(MCP4728_CHANNEL_B, 0);
+        dac.setChannelValue(MCP4728_CHANNEL_C, 0);
+        dac.setChannelValue(MCP4728_CHANNEL_D, 0);
+        Serial.println("DAC OK");
+    }
+    else
+    {
+        dac_available = false;
+        Serial.println("DAC failed");
+    }
+}
+
+// ==================== TCP Command Handler ====================
+void handleTCPCommands()
+{
+    // Accept new connections
+    if (!tcp_connected && tcpServer.hasClient())
+    {
+        if (mode_lock != FORCE_WEB_MODE)
+        {
+            if (tcpClient) tcpClient.stop();
+
+            tcpClient = tcpServer.available();
+            if (tcpClient)
+            {
+                tcp_connected = true;
+                if (mode_lock == AUTO_MODE)
+                {
+                    control_mode = TCP_MODE;
+                }
+                tcp_buffer_idx = 0;
+                Serial.print("TCP connected: ");
+                Serial.println(tcpClient.remoteIP());
+
+                tcpClient.println("ESP32 Glove Ready");
+                tcpClient.flush();
+
+                last_tcp_command = millis();
+                status_changed = true;
+            }
+        }
+        else
+        {
+            WiFiClient rejectClient = tcpServer.available();
+            if (rejectClient)
+            {
+                rejectClient.println("ERROR: Forced WEB mode");
+                rejectClient.stop();
+            }
+        }
+    }
+
+    // Process incoming data
+    if (tcp_connected && tcpClient.connected())
+    {
+        while (tcpClient.available() && tcp_buffer_idx < sizeof(tcp_command_buffer) - 1)
+        {
+            char c = tcpClient.read();
+            if (c == '\n')
+            {
+                if (tcp_buffer_idx > 0)
+                {
+                    tcp_command_buffer[tcp_buffer_idx] = '\0';
+                    parseAndExecuteTCPCommand(String(tcp_command_buffer));
+                    tcp_buffer_idx = 0;
+                }
+            }
+            else if (c >= 32)
+            {
+                tcp_command_buffer[tcp_buffer_idx++] = c;
+            }
         }
     }
 }
 
-void processTcpCommand(const String &command)
+void parseAndExecuteTCPCommand(String command)
 {
-    if (control_mode != TCP_MODE && mode_lock == AUTO_MODE)
-    {
-        tcpClient.println("ERROR: Not in TCP mode");
-        tcpClient.flush();
-        return;
-    }
+    command.trim();
+    if (command.length() == 0) return;
+
+    last_tcp_command = millis();
 
     int colonIndex = command.indexOf(':');
     if (colonIndex > 0)
@@ -949,10 +1155,8 @@ void processTcpCommand(const String &command)
 
         if (cmdType == "g")
         {
-            int newGesture = params.toInt();
-            newGesture = sanitizeGestureId(newGesture);
-            gesture = newGesture;
-            Serial.println("TCP: Set gesture " + String(gesture));
+            gesture = sanitizeGestureId(params.toInt());
+            Serial.println("TCP: gesture=" + String(gesture));
             tcpClient.println("OK");
             status_changed = true;
         }
@@ -961,23 +1165,21 @@ void processTcpCommand(const String &command)
             int colonIndex2 = params.indexOf(':');
             if (colonIndex2 > 0)
             {
-                int flex = constrain(params.substring(0, colonIndex2).toInt(), 0, 100);
-                int ext = constrain(params.substring(colonIndex2 + 1).toInt(), 0, 100);
-                pressure[0] = flex;
-                pressure[1] = ext;
-                Serial.println("TCP: Set pressure " + String(pressure[0]) + ":" + String(pressure[1]));
+                pressure[0] = constrain(params.substring(0, colonIndex2).toInt(), 0, 100);
+                pressure[1] = constrain(params.substring(colonIndex2 + 1).toInt(), 0, 100);
+                Serial.printf("TCP: pressure=%d:%d\n", pressure[0], pressure[1]);
                 tcpClient.println("OK");
                 status_changed = true;
             }
             else
             {
-                tcpClient.println("ERROR: Invalid pressure format");
+                tcpClient.println("ERROR: Invalid format");
             }
         }
         else if (cmdType == "s")
         {
             speed = constrain(params.toInt(), 0, 4);
-            Serial.println("TCP: Set speed " + String(speed));
+            Serial.println("TCP: speed=" + String(speed));
             tcpClient.println("OK");
             status_changed = true;
         }
@@ -997,18 +1199,18 @@ void processTcpCommand(const String &command)
                 if (valid)
                 {
                     finger_states = params;
-                    Serial.println("TCP: Set finger states " + finger_states);
+                    Serial.println("TCP: fingers=" + finger_states);
                     tcpClient.println("OK");
                     status_changed = true;
                 }
                 else
                 {
-                    tcpClient.println("ERROR: Invalid finger states");
+                    tcpClient.println("ERROR: Invalid states");
                 }
             }
             else
             {
-                tcpClient.println("ERROR: Finger states must be 6 digits");
+                tcpClient.println("ERROR: Must be 6 digits");
             }
         }
         else
@@ -1023,12 +1225,12 @@ void processTcpCommand(const String &command)
     }
     else
     {
-        tcpClient.println("ERROR: Invalid command format");
+        tcpClient.println("ERROR: Invalid format");
     }
     tcpClient.flush();
 }
 
-// ==================== Actuator Update (保持不变) ====================
+// ==================== Actuator Update ====================
 void updateActuators()
 {
     gestureToFingerStates();
@@ -1047,9 +1249,7 @@ void gestureToFingerStates()
 
     if (gesture != lastGesture)
     {
-        String oldFingerStates = finger_states;
         lastGesture = gesture;
-
         finger_states = GESTURE_TO_FINGER_STATES_MAP[gesture];
         status_changed = true;
     }
@@ -1077,8 +1277,6 @@ void setFingerStates()
             break;
         case '3':
             digitalWrite(pinching_pins[i], HIGH);
-            break;
-        default:
             break;
         }
     }
@@ -1169,149 +1367,4 @@ void emergencyStop()
         dac.setChannelValue(MCP4728_CHANNEL_C, 0);
         dac.setChannelValue(MCP4728_CHANNEL_D, 0);
     }
-}
-
-// ==================== Setup (优化) ====================
-void setup()
-{
-    Serial.begin(115200);
-    delay(500);
-    Serial.println("\n=== ESP32 Glove Control (Optimized V4.1) ===");
-
-    // 硬件初始化
-    for (int i = 0; i < 5; i++)
-    {
-        pinMode(flexion_pins[i], OUTPUT);
-        pinMode(extension_pins[i], OUTPUT);
-        pinMode(pinching_pins[i], OUTPUT);
-        digitalWrite(flexion_pins[i], LOW);
-        digitalWrite(extension_pins[i], LOW);
-        digitalWrite(pinching_pins[i], LOW);
-    }
-    pinMode(abduction_pin, OUTPUT);
-    pinMode(adduction_pin, OUTPUT);
-    pinMode(emergency_pin, INPUT_PULLUP);
-    digitalWrite(abduction_pin, LOW);
-    digitalWrite(adduction_pin, LOW);
-
-    // I2C和DAC初始化
-    Wire.begin(sda_pin, scl_pin);
-    if (dac.begin())
-    {
-        Serial.println("DAC initialized successfully");
-        dac_available = true;
-    }
-    else
-    {
-        Serial.println("DAC initialization failed - running without DAC");
-        dac_available = false;
-    }
-
-    // WiFi AP初始化
-    WiFi.disconnect(true); // 清除之前的WiFi配置
-    delay(100);
-    WiFi.mode(WIFI_AP_STA);
-    delay(100);
-    
-    // 配置AP参数
-    WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-    
-    // 启动AP
-    bool apStarted = WiFi.softAP(ap_ssid, ap_password);
-    if (apStarted) {
-        Serial.println("AP started successfully");
-    } else {
-        Serial.println("AP start failed!");
-    }
-    
-    delay(500); // 增加延迟确保AP完全启动
-    
-    IPAddress IP = WiFi.softAPIP();
-    Serial.print("AP IP address: ");
-    Serial.println(IP);
-    Serial.print("AP SSID: ");
-    Serial.println(ap_ssid);
-    Serial.print("AP Password: ");
-    Serial.println(ap_password);
-
-    // WiFi STA初始化（非阻塞）
-    if (strlen(sta_ssid) > 0)
-    {
-        WiFi.begin(sta_ssid, sta_password);
-        Serial.println("Connecting to WiFi (non-blocking)...");
-    }
-
-    // TCP服务器初始化
-    tcpServer.begin();
-    tcp_server_started = true;
-    Serial.println("TCP server started on port " + String(tcp_port));
-
-    // 按钮串口初始化
-    if (button_bridge_serial_enabled)
-    {
-        button_serial.begin(115200, SERIAL_8N1, button_serial_rx_pin, button_serial_tx_pin);
-        Serial.println("Button bridge serial initialized");
-    }
-
-    // Web服务器路由
-    server.on("/", handleRoot);
-    server.on("/set", handleSet);
-    server.on("/stop", handleStop);
-    server.on("/status", handleStatus);
-    server.on("/set_mode", handleSetMode);
-    server.on("/set_button", handleSetButton);
-    server.onNotFound(handleNotFound);
-    server.begin();
-    Serial.println("Web server started");
-
-    Serial.println("=== Setup complete ===\n");
-}
-
-// ==================== 优化后的Loop函数 ====================
-void loop()
-{
-    // 优先级1: 按钮输入检查（最高优先级，最快响应）
-    checkButtonBridgeSerial();
-    checkButtonBridgeWifi();
-    
-    // 优先级2: 处理命令队列
-    processCommandQueue();
-    
-    // 优先级3: TCP客户端检查
-    checkTcpClient();
-    
-    // 优先级4: Web服务器处理
-    server.handleClient();
-    
-    // 优先级5: 控制模式更新
-    updateControlMode();
-    
-    // 优先级6: 执行器更新（如果状态改变）
-    if (status_changed)
-    {
-        updateActuators();
-        status_changed = false;
-    }
-    
-    // 优先级7: WiFi状态检查（降低频率，避免阻塞）
-    static unsigned long last_wifi_check = 0;
-    unsigned long now = millis();
-    if (now - last_wifi_check > 2000) // 每2秒检查一次
-    {
-        last_wifi_check = now;
-        if (WiFi.status() != WL_CONNECTED && strlen(sta_ssid) > 0)
-        {
-            // 非阻塞重连
-            WiFi.reconnect();
-        }
-    }
-    
-    // 优先级8: 紧急停止检查
-    if (digitalRead(emergency_pin) == LOW)
-    {
-        emergencyStop();
-        delay(100);
-    }
-    
-    // 不添加任何delay，保持最快循环
 }
