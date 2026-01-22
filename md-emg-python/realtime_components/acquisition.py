@@ -63,6 +63,63 @@ def AcquisitionLoop(conn_64, acq_params, dec_params, dec_queue, save_queue, stop
         )
         zi_band = np.transpose(np.array([zi_band for _ in range(num_channels_emg)]))
 
+    # =============================================================================
+    # SCI-Specific Filters Initialization
+    # =============================================================================
+    sci_config = acq_params.get('sci_config', {})
+    sci_enabled = sci_config.get('enabled', False)
+    
+    # Spatial filter (Laplacian or CAR)
+    spatial_filter = None
+    if sci_enabled:
+        spatial_cfg = sci_config.get('signal_enhancement', {}).get('spatial_filter', {})
+        if spatial_cfg.get('enabled', False):
+            filter_type = spatial_cfg.get('type', 'laplacian')
+            if filter_type == 'laplacian':
+                grid_shape = tuple(spatial_cfg.get('grid_shape', [8, 4]))
+                laplacian_type = spatial_cfg.get('laplacian_type', 'small')
+                spatial_filter = LaplacianFilter(grid_shape=grid_shape, filter_type=laplacian_type)
+                print(f'  + Laplacian spatial filter enabled ({laplacian_type}, grid: {grid_shape})')
+            elif filter_type == 'car':
+                spatial_filter = CommonAverageReference()
+                print('  + Common Average Reference (CAR) filter enabled')
+    
+    # Adaptive LMS filter for motor artifact removal
+    adaptive_filter = None
+    if sci_enabled:
+        adaptive_cfg = sci_config.get('signal_enhancement', {}).get('adaptive_filter', {})
+        if adaptive_cfg.get('enabled', False):
+            filter_order = adaptive_cfg.get('filter_order', 32)
+            learning_rate = adaptive_cfg.get('learning_rate', 0.01)
+            adaptive_filter = LMSAdaptiveFilter(
+                n_channels=num_channels_emg,
+                filter_order=filter_order,
+                mu=learning_rate
+            )
+            print(f'  + LMS adaptive filter enabled (order: {filter_order}, mu: {learning_rate})')
+    
+    # Motion artifact detector
+    artifact_detector = None
+    if sci_enabled:
+        artifact_cfg = sci_config.get('signal_enhancement', {}).get('motion_artifact', {})
+        if artifact_cfg.get('enabled', False):
+            threshold = artifact_cfg.get('threshold_factor', 5.0)
+            artifact_detector = MotionArtifactDetector(
+                n_channels=num_channels_emg,
+                fsample=fsample,
+                artifact_threshold=threshold
+            )
+            print(f'  + Motion artifact detector enabled (threshold: {threshold}x)')
+    
+    # Highpass filter for removing low-frequency motion artifacts (SCI-specific)
+    highpass_enabled = sci_enabled and sci_config.get('signal_enhancement', {}).get('highpass', {}).get('enabled', False)
+    if highpass_enabled:
+        hp_cutoff = sci_config.get('signal_enhancement', {}).get('highpass', {}).get('cutoff', 20)
+        hp_order = sci_config.get('signal_enhancement', {}).get('highpass', {}).get('order', 2)
+        b_high, a_high, zi_high = butter_highpass(cutoff=hp_cutoff, order=hp_order, fs=fsample)
+        zi_high = np.transpose(np.array([zi_high for _ in range(num_channels_emg)]))
+        print(f'  + Highpass filter enabled ({hp_cutoff} Hz, order {hp_order})')
+
     t0 = time.perf_counter()
 
     # loop for reading the data from the 64
@@ -91,6 +148,25 @@ def AcquisitionLoop(conn_64, acq_params, dec_params, dec_queue, save_queue, stop
 
             if acq_params['bandpass']:
                 buffer_raw_data, zi_band = butter_bandpass_filter(buffer_raw_data, b_band, a_band, zi_band)
+
+            # =============================================================================
+            # SCI-Specific Filtering Pipeline
+            # =============================================================================
+            if sci_enabled:
+                # Apply highpass to remove low-frequency motion artifacts
+                if highpass_enabled:
+                    buffer_raw_data, zi_high = butter_highpass_filter(buffer_raw_data, b_high, a_high, zi_high)
+                
+                # Apply spatial filter (Laplacian or CAR) for EMI reduction
+                if spatial_filter is not None:
+                    buffer_raw_data = spatial_filter.apply(buffer_raw_data)
+                
+                # Detect and suppress motion artifacts
+                if artifact_detector is not None:
+                    is_artifact, artifact_mask = artifact_detector.detect(buffer_raw_data[-proc_interval_samples:,:])
+                    if np.any(is_artifact):
+                        # Apply soft mask to suppress artifacts
+                        buffer_raw_data[-proc_interval_samples:,:] *= artifact_mask[:, np.newaxis]
 
             # decoding
             if decoding_active and is_decoding.value:

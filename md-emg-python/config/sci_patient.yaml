@@ -1,0 +1,189 @@
+# SCI Patient Configuration
+# ==========================
+# Specialized settings for Spinal Cord Injury patients using EMG-controlled exoskeletons.
+# These settings address the unique challenges of low SNR, spasticity, and fatigue.
+
+# Enable SCI-specific processing
+enabled: true
+
+# Patient profile (can be overridden per subject)
+profile:
+  injury_level: "C5-C6" # Cervical level (affects expected signal strength)
+  spasticity_level: "moderate" # Options: none, mild, moderate, severe
+  fatigue_rate: "high" # Options: low, moderate, high
+
+# =============================================================================
+# Signal Enhancement
+# =============================================================================
+signal_enhancement:
+  # Spatial filtering for noise reduction (recommended for same-hand setup)
+  spatial_filter:
+    enabled: true
+    type: "laplacian" # Options: laplacian, car (common average reference)
+    laplacian_type: "small" # Options: small (4-neighbor), large (8-neighbor)
+    grid_shape: [8, 4] # Electrode grid shape (rows, cols) - adjust for your setup
+
+  # Adaptive motor artifact removal
+  adaptive_filter:
+    enabled: true
+    type: "lms" # Least Mean Squares adaptive filter
+    filter_order: 32 # Number of filter taps
+    learning_rate: 0.01 # Step size (mu) - lower = more stable, higher = faster adaptation
+    reference_source: "motor_pwm" # What signal to use as noise reference
+
+  # Blanking window during motor actuation
+  blanking_filter:
+    enabled: true
+    pre_blank_ms: 5 # Blank before motor event
+    post_blank_ms: 25 # Blank after motor event (longer for SCI due to reflexes)
+
+  # Motion artifact detection
+  motion_artifact:
+    enabled: true
+    threshold_factor: 5.0 # Detection threshold (multiples of baseline std)
+    suppress_duration_ms: 50 # Duration to suppress after artifact detection
+
+# =============================================================================
+# Spasticity Management
+# =============================================================================
+spasticity:
+  # Spasticity/reflex detection
+  detection:
+    enabled: true
+    threshold_factor: 3.0 # Amplitude factor above baseline to detect spasm
+    rise_time_ms: 50 # Maximum rise time for spasm classification
+    refractory_ms: 500 # Refractory period after spasm (prevent false triggers)
+    post_movement_window_ms: 200 # Window after exo movement to watch for reflexes
+
+  # Response to detected spasticity
+  response:
+    action: "suppress_and_hold" # Options: suppress_and_hold, gradual_release, emergency_stop
+    hold_duration_ms: 1000 # How long to hold current position during spasm
+    gradual_release_rate: 0.1 # Rate of release if using gradual_release
+
+# =============================================================================
+# Fatigue Compensation
+# =============================================================================
+fatigue:
+  enabled: true
+
+  # Tracking parameters
+  baseline_window_sec: 5 # Duration to establish initial baseline
+  tracking_window_sec: 30 # Rolling window for fatigue estimation
+
+  # Compensation limits
+  max_compensation_factor: 2.5 # Maximum sensitivity boost (2.5x = 150% increase)
+  min_amplitude_ratio: 0.2 # Below this, assume complete fatigue
+
+  # Adaptive threshold adjustment
+  adaptive_threshold:
+    enabled: true
+    adjustment_rate: 0.05 # Rate of threshold adjustment per second
+
+# =============================================================================
+# Hybrid Control Mode (Recommended for SCI)
+# =============================================================================
+# Uses EMG as trigger, robot handles trajectory (shared autonomy)
+hybrid_control:
+  enabled: true
+
+  # Trigger mode settings
+  trigger_mode:
+    type: "threshold" # Options: threshold, pattern, sustained
+
+    # Threshold-based triggering
+    threshold:
+      activation: 0.3 # Fraction of MVC to trigger action
+      deactivation: 0.15 # Fraction of MVC to stop action
+      hysteresis: true # Use hysteresis to prevent oscillation
+
+    # Sustained activation (must hold for duration)
+    sustained:
+      duration_ms: 300 # Must sustain activation for this long
+      allow_brief_dropout_ms: 50 # Allow brief dropouts during sustained period
+
+  # Shared autonomy settings
+  shared_autonomy:
+    enabled: true
+
+    # Robot takes over trajectory execution
+    trajectory_mode: "predefined" # Options: predefined, adaptive
+
+    # Predefined trajectories
+    trajectories:
+      hand_open:
+        duration_ms: 800
+        profile: "smooth" # Options: smooth, linear, fast
+      hand_close:
+        duration_ms: 600
+        profile: "smooth"
+      grasp_hold:
+        force_level: 0.7 # Fraction of max force
+        duration_ms: 2000
+
+    # Override/interrupt settings
+    override:
+      enabled: true
+      emergency_stop_threshold: 0.8 # High EMG = emergency stop
+      user_release_threshold: 0.1 # Low EMG for prolonged time = release
+
+# =============================================================================
+# Confidence and Stability
+# =============================================================================
+prediction_filtering:
+  # Minimum confidence for action
+  min_confidence: 0.5 # Higher than healthy (0.4) due to lower SNR
+
+  # Consecutive prediction requirement
+  consecutive_predictions:
+    enabled: true
+    count: 4 # More than healthy (3) for stability
+    allow_rest_interrupts: false # Don't reset on rest predictions
+
+  # Temporal smoothing
+  smoothing:
+    enabled: true
+    window_size: 5 # Number of predictions to average
+    method: "majority_vote" # Options: majority_vote, weighted_average, median
+
+# =============================================================================
+# Safety Limits
+# =============================================================================
+safety:
+  # Force limits (fraction of max)
+  max_force: 0.7 # Reduced for SCI patients
+
+  # Speed limits
+  max_speed: 3 # 0-4 scale, reduced from 4
+
+  # Emergency stop conditions
+  emergency_stop:
+    on_spasm: true
+    on_signal_loss: true
+    signal_loss_duration_ms: 500
+    on_high_amplitude: true # Stop on very high EMG (possible electrode issue)
+    high_amplitude_threshold: 10.0 # Multiples of baseline
+
+  # Recovery after emergency stop
+  recovery:
+    automatic: false # Require manual intervention
+    gradual_restart: true
+    restart_ramp_duration_ms: 2000
+
+# =============================================================================
+# Proximal Electrode Support (Alternative Placement)
+# =============================================================================
+# For patients where forearm signals are too weak, use proximal muscles
+proximal_placement:
+  enabled: false # Enable if using bicep/shoulder electrodes
+
+  # Mapping from proximal activation to hand gestures
+  mapping:
+    bicep_activation: "hand_close"
+    tricep_activation: "hand_open"
+    shoulder_shrug: "grasp_hold"
+
+  # Co-contraction handling
+  cocontraction:
+    detection_threshold: 0.3 # Both agonist/antagonist active
+    action: "hold_position" # Options: hold_position, rest, ignore

@@ -1,2 +1,2 @@
-ip_address: "172.20.10.4" # use the one of the PC, otherwise try with .3 if it doesn't work
+ip_address: "192.168.50.1" # Laptop hotspot IP (Sessantaquattro connects TO this)
 port: 45454

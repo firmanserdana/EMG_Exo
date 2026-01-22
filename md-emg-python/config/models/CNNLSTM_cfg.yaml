@@ -1,0 +1,138 @@
+# CNN-LSTM Model Configuration
+# =============================
+# Hybrid spatial-temporal model for HD-sEMG decoding
+
+# Model selection
+model_type: "CNNLSTM" # Options: CNNLSTM, CNNLSTM_LIGHT
+
+# =============================================================================
+# Architecture Parameters
+# =============================================================================
+
+# Input configuration
+input_channels: 32 # Number of EMG electrodes (HD-sEMG grid)
+sequence_length: 30 # Time steps (samples)
+
+# Spatial CNN (learns "virtual muscles")
+spatial_cnn:
+  virtual_channels: 8 # Output channels (learned spatial patterns)
+  kernel_size: 3 # Spatial convolution kernel
+  num_blocks: 2 # Number of spatial conv blocks
+  use_attention: true # Channel attention mechanism
+
+# Temporal LSTM
+temporal_lstm:
+  hidden_size: 64 # LSTM hidden units
+  num_layers: 1 # LSTM layers (keep 1 for real-time)
+  bidirectional: false # Use bidirectional LSTM (slower, more accurate)
+
+# Output
+num_classes: 3 # open_close: 3, grasp_patterns: 4, single_fingers: 4
+
+# =============================================================================
+# Regularization
+# =============================================================================
+regularization:
+  # Electrode dropout (key for same-hand robustness)
+  electrode_dropout: 0.10 # Probability of dropping each electrode
+  electrode_dropout_training_only: true
+
+  # Standard dropout
+  dropout: 0.30 # Applied between layers
+
+  # L2 regularization
+  weight_decay: 0.0001
+
+# =============================================================================
+# Training Parameters
+# =============================================================================
+training:
+  epochs: 100
+  batch_size: 64
+  learning_rate: 0.001
+  optimizer: "AdamW" # Options: Adam, AdamW, SGD
+  scheduler: "plateau" # Options: plateau, cosine, step, none
+
+  # Early stopping
+  patience: 15
+  min_delta: 0.001
+
+  # Gradient clipping
+  gradient_clip: 1.0
+
+# =============================================================================
+# Transfer Learning Configuration
+# =============================================================================
+transfer_learning:
+  enabled: true
+
+  # Pre-trained model path (trained on healthy subjects)
+  pretrained_model: "models/pretrained/cnnlstm_healthy.pth"
+
+  # Which layers to freeze during transfer
+  freeze_strategy: "spatial" # Options: none, spatial, all_but_classifier
+
+  # Fine-tuning parameters (lower LR for frozen layers)
+  fine_tune_lr: 0.01 # Higher LR for unfrozen layers
+  classifier_lr: 0.01 # LR for classifier layer
+  frozen_lr: 0.0 # LR for frozen layers (0 = frozen)
+
+  # Quick calibration mode
+  quick_calibration:
+    enabled: true
+    epochs: 5
+    min_samples_per_class: 30
+
+# =============================================================================
+# Data Augmentation
+# =============================================================================
+augmentation:
+  enabled: true
+
+  # Electrode dropout augmentation
+  electrode_dropout_aug:
+    enabled: true
+    drop_prob: 0.10
+    drop_contiguous: true # Drop adjacent electrodes together
+    n_copies: 2 # Augmented copies per sample
+
+  # Time shift
+  time_shift:
+    enabled: true
+    max_shift: 5 # Max samples to shift
+
+  # Noise injection
+  noise_injection:
+    enabled: true
+    std: 0.05 # Noise standard deviation
+
+  # Amplitude scaling
+  amplitude_scaling:
+    enabled: true
+    scale_range: [0.9, 1.1]
+
+# =============================================================================
+# Lightweight Model (for deployment)
+# =============================================================================
+light_model:
+  # Reduced architecture for faster inference
+  virtual_channels: 4
+  hidden_size: 32
+  num_blocks: 1
+  use_attention: false
+
+  # Expected inference time
+  target_latency_ms: 10
+
+# =============================================================================
+# Inference Settings
+# =============================================================================
+inference:
+  # Use lighter model
+  use_light_model: false
+
+  # Smoothing
+  prediction_smoothing: 3 # Average over N predictions
+
+  # Confidence threshold
+  confidence_threshold: 0.6 # Minimum confidence for prediction

@@ -1,0 +1,241 @@
+# Functional Test Configuration
+# ==============================
+# Settings for Box and Block Test (BBT) and other functional assessments
+# All features can be enabled/disabled independently
+
+# =============================================================================
+# Test Selection
+# =============================================================================
+active_test: "box_and_block" # Options: box_and_block, peg_test, pouring, jar_opening
+
+# Test-specific configurations
+tests:
+  box_and_block:
+    description: "Box and Block Test - grasp block, transport, release"
+    phases: ["grasp", "transport", "release"]
+    scoring:
+      time_limit_sec: 60
+      count_blocks: true
+
+  peg_test:
+    description: "9-Hole Peg Test - precision grasp and placement"
+    phases: ["grasp_peg", "transport", "insert", "release"]
+    grasp_type: "precision"
+
+  pouring:
+    description: "Pouring water from bottle to cup"
+    phases: ["grasp_bottle", "lift", "tilt", "pour", "return", "release"]
+    requires_wrist: true
+
+  jar_opening:
+    description: "Opening jar lid (spinning cap)"
+    phases: ["grasp_lid", "rotate_cw", "release"]
+    requires_rotation: true
+    grasp_type: "power"
+
+# =============================================================================
+# FSM Control Settings (Core Strategy)
+# =============================================================================
+fsm_control:
+  enabled: true # Master switch for FSM mode
+
+  # Trigger thresholds (as fraction of calibration baseline)
+  flexor_trigger_threshold: 0.40 # Threshold to trigger grasp
+  extensor_trigger_threshold: 0.35 # Threshold to trigger release
+
+  # Trigger detection timing
+  trigger_rise_time_ms: 100 # Max time for "sharp rise" detection
+  trigger_sustained_ms: 50 # Min sustained activation to confirm intent
+
+  # *** KEY FEATURE: Grasp Locking ***
+  # This solves the "slacking" problem during transport
+  lock_grasp_enabled: true # Enable grasp locking during transport phase
+  lock_duration_min_ms: 300 # Minimum time before release allowed
+  lock_ignore_threshold: 0.80 # Ignore EMG below this (prevents accidental drops)
+
+  # Trajectory execution
+  close_trajectory_ms: 400 # Time to execute close motion
+  open_trajectory_ms: 500 # Time to execute open motion
+  trajectory_profile: "smooth" # Options: smooth, linear, fast
+
+  # Safety
+  emergency_stop_threshold: 0.90 # Very high EMG = emergency stop
+  max_grasp_duration_sec: 30.0 # Auto-release safety timeout
+
+  # Channel mapping for 32-channel grid
+  # Adjust these based on electrode placement
+  flexor_channels: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  extensor_channels:
+    [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+
+  # Debouncing
+  state_change_cooldown_ms: 200 # Prevent rapid state oscillation
+
+# =============================================================================
+# CNN-LSTM Model Settings
+# =============================================================================
+cnn_lstm_model:
+  enabled: true # Use CNN-LSTM instead of standard LSTM
+
+  # Architecture
+  type: "standard" # Options: standard, light
+  input_channels: 32
+  virtual_channels: 8 # Output of spatial CNN (learned "virtual muscles")
+  hidden_size: 64 # LSTM hidden units
+  num_layers: 1 # LSTM layers (keep 1 for speed)
+  use_attention: true # Channel attention mechanism
+
+  # Regularization
+  electrode_dropout: 0.10 # Dropout entire electrodes during training
+  dropout: 0.30 # Standard dropout
+
+  # For lightweight deployment
+  light_config:
+    virtual_channels: 4
+    hidden_size: 32
+
+# =============================================================================
+# Transfer Learning Settings
+# =============================================================================
+transfer_learning:
+  enabled: true
+
+  # Pre-training (done once, on healthy subjects)
+  pretrain:
+    healthy_data_path: "data/healthy/pretrain"
+    epochs: 100
+    batch_size: 64
+    learning_rate: 0.001
+    patience: 10
+
+  # Transfer learning (per patient)
+  transfer:
+    freeze_spatial: true # Freeze CNN layers, train only classifier
+    epochs: 20 # Few epochs needed
+    batch_size: 32
+    learning_rate: 0.01 # Higher LR for fast adaptation
+
+  # Quick calibration (clinical mode)
+  quick_calibration:
+    enabled: true
+    n_epochs: 5 # Very few epochs
+    n_trials_per_class: 3 # Minimum trials needed per gesture
+
+# =============================================================================
+# Dynamic Training (Movement Robustness)
+# =============================================================================
+dynamic_training:
+  enabled: true
+
+  # Collect training data WITH arm movement
+  collect_movement_data: true
+  movement_types:
+    - "arm_lift" # Lift arm (shoulder activation)
+    - "arm_lateral" # Move left/right (simulates BBT transport)
+    - "arm_reach" # Reach forward
+
+  # Balance static vs movement data
+  balance_data: true
+  static_to_movement_ratio: 1.0 # Equal amounts
+
+# =============================================================================
+# Electrode Dropout Augmentation
+# =============================================================================
+electrode_dropout_augmentation:
+  enabled: true
+
+  # Training-time augmentation
+  drop_probability: 0.10 # Probability of dropping each electrode
+  drop_contiguous: true # Also drop adjacent electrodes (simulates grid lift)
+  n_augmentations: 2 # Augmented copies per sample
+
+# =============================================================================
+# ESP32 Exoskeleton Settings
+# =============================================================================
+esp32_control:
+  enabled: true
+
+  # Gesture mapping for FSM states
+  gesture_mapping:
+    idle: 2 # Extend/open
+    closing: 1 # Flex/close
+    locked: 1 # Maintain closed
+    opening: 2 # Extend/open
+    emergency: 0 # Relax
+
+  # Force levels (0-100%)
+  force_levels:
+    closing: 80 # Ramp up during close
+    locked_grasp: 70 # Moderate hold force
+    opening: 0 # No force during open
+
+  # Speed settings
+  close_speed: 3 # 0-4 scale
+  open_speed: 2 # Slightly slower open
+
+# =============================================================================
+# Calibration Protocol
+# =============================================================================
+calibration:
+  # Minimum trials for each gesture
+  trials_per_gesture:
+    rest: 5
+    grasp: 10
+    open: 10
+
+  # Duration settings
+  trial_duration_sec: 3.0
+  rest_between_trials_sec: 2.0
+
+  # Movement calibration (for dynamic training)
+  movement_calibration:
+    enabled: true
+    arm_positions: ["down", "forward", "up", "left", "right"]
+    trials_per_position: 3
+
+  # Quality checks
+  quality_checks:
+    min_snr: 5.0 # Minimum signal-to-noise ratio
+    max_baseline_variability: 0.2
+    check_electrode_contact: true
+
+# =============================================================================
+# Scoring and Logging
+# =============================================================================
+scoring:
+  enabled: true
+
+  # BBT-specific
+  box_and_block:
+    log_block_count: true
+    log_drop_events: true
+    log_grasp_timing: true
+
+  # General metrics
+  log_state_transitions: true
+  log_emg_amplitude: true
+  save_session_data: true
+
+  # Output
+  results_folder: "results-functional"
+
+# =============================================================================
+# Feature Toggles (Master Switches)
+# =============================================================================
+features:
+  # Core control
+  use_fsm_control: true # FSM vs proportional control
+  use_grasp_locking: true # Lock grasp during transport
+
+  # Model
+  use_cnn_lstm: true # CNN-LSTM vs standard LSTM
+  use_transfer_learning: true # Transfer from healthy subjects
+
+  # Robustness
+  use_dynamic_training: true # Train with movement data
+  use_electrode_dropout: true # Dropout augmentation
+
+  # SCI-specific (from sci_patient.yaml)
+  use_sci_mode: false # Enable SCI-specific features
+  use_spasticity_detection: false
+  use_fatigue_compensation: false
