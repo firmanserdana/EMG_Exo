@@ -1171,6 +1171,20 @@ def generate_mvc_statistics():
                     f.write(f"| {condition} | - | - | n<3 |\n")
             f.write("\n")
 
+            # Normality tests
+            f.write("### Normality Tests (Shapiro-Wilk)\n\n")
+            f.write("| Condition | W-statistic | p-value | Normal? |\n")
+            f.write("|-----------|-------------|---------|--------|\n")
+            for condition in CONDITIONS:
+                vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
+                if vals and len(vals) >= 3:
+                    w_stat, p_val, is_normal = test_normality(vals, condition)
+                    normal_text = "✓ Yes" if is_normal else "✗ No"
+                    f.write(f"| {condition} | {w_stat:.4f} | {format_pvalue(p_val)} | {normal_text} |\n")
+                else:
+                    f.write(f"| {condition} | - | - | n<3 |\n")
+            f.write("\n")
+
             if 'Active glove' not in subject_means or obj_id not in subject_means['Active glove']:
                 f.write("No Active glove data for this object.\n\n")
                 continue
