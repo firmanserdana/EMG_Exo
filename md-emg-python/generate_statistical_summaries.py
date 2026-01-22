@@ -14,6 +14,8 @@ CONDITIONS = ['Passive glove', 'Active glove', 'No glove']
 
 def format_pvalue(p):
     """Format p-value with significance stars"""
+    if np.isnan(p):
+        return "- ns"
     if p < 0.001:
         return f"{p:.4f} ***"
     elif p < 0.01:
@@ -22,6 +24,23 @@ def format_pvalue(p):
         return f"{p:.4f} *"
     else:
         return f"{p:.4f} ns"
+
+
+def test_normality(values, name=""):
+    """
+    Test normality using Shapiro-Wilk test.
+    Returns: (W-statistic, p-value, is_normal)
+    Note: Shapiro-Wilk is suitable for small samples (n < 50)
+    """
+    if len(values) < 3:
+        return np.nan, np.nan, False
+    try:
+        w_stat, p_value = stats.shapiro(values)
+        is_normal = p_value >= 0.05  # Fail to reject H0 => normal
+        return w_stat, p_value, is_normal
+    except Exception:
+        return np.nan, np.nan, False
+
 
 def cohens_d(group1, group2):
     """Calculate Cohen's d effect size"""
@@ -759,7 +778,14 @@ def generate_duration_statistics():
         f.write("# Statistical Analysis: Task Duration (Subject-Level)\n\n")
         f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write("**Metric:** Mean segment duration per subject, per object, per condition (seconds).\n\n")
-        f.write("**Tests:** Welch (one-tailed Active < Other), Mann-Whitney (one-tailed), Wilcoxon paired (Active < Other, subject-matched).\n\n")
+        f.write("**Tests:**\n")
+        f.write("- One-tailed: Welch t-test, Mann-Whitney, Wilcoxon (Active > Other, since active tasks take longer)\n")
+        f.write("- Two-tailed: Welch t-test, Mann-Whitney, Wilcoxon (any difference)\n\n")
+        f.write("**Why Welch's t-test instead of Student's t-test?**\n")
+        f.write("- Welch's t-test does NOT assume equal variances between groups\n")
+        f.write("- More robust when sample sizes or variances differ between conditions\n")
+        f.write("- Student's t-test assumes equal variances (homoscedasticity), which is often violated\n")
+        f.write("- Welch's test is generally recommended as the default for comparing two groups\n\n")
         f.write("**Pairing rule:** Wilcoxon uses only subjects present in both conditions for each object.\n\n")
         f.write("---\n\n")
 
@@ -778,15 +804,32 @@ def generate_duration_statistics():
                     f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
 
+            # Normality tests
+            f.write("### Normality Tests (Shapiro-Wilk)\n\n")
+            f.write("Tests whether data follows a normal distribution. p < 0.05 suggests non-normality.\n\n")
+            f.write("| Condition | W-statistic | p-value | Normal? |\n")
+            f.write("|-----------|-------------|---------|--------|\n")
+            for condition in CONDITIONS:
+                vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
+                if vals and len(vals) >= 3:
+                    w_stat, p_val, is_normal = test_normality(vals, condition)
+                    normal_text = "✓ Yes" if is_normal else "✗ No"
+                    f.write(f"| {condition} | {w_stat:.4f} | {format_pvalue(p_val)} | {normal_text} |\n")
+                else:
+                    f.write(f"| {condition} | - | - | n<3 |\n")
+            f.write("\n")
+
             # Hypothesis testing Active vs others
             if 'Active glove' not in subject_means or obj_id not in subject_means['Active glove']:
                 f.write("No Active glove data for this object.\n\n")
                 continue
 
             active_map = subject_means['Active glove'][obj_id]
-            f.write("### Hypothesis: Active glove < Other\n\n")
-            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | Supported? (Wilcoxon) |\n")
-            f.write("|------------|-------------------|--------|---------------------|---|-------------------|---|------------------------|------------------------|\n")
+            
+            # One-tailed tests (Active > Other for duration - active tasks take longer)
+            f.write("### One-Tailed Tests: Active glove > Other (duration expected longer with assistance)\n\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | Supported? |\n")
+            f.write("|------------|-------------------|--------|-----------|---|--------|---|--------------|------------|\n")
 
             for other_cond in ['Passive glove', 'No glove']:
                 if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
@@ -800,13 +843,75 @@ def generate_duration_statistics():
                     f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
                     continue
 
-                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
-                support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+                # One-tailed: Active > Other (greater)
+                t_stat, p_two = stats.ttest_ind(active_vals, other_vals, equal_var=False)
+                p_welch_gt = p_two / 2 if t_stat > 0 else 1 - (p_two / 2)
+                
+                u_stat, _ = stats.mannwhitneyu(active_vals, other_vals, alternative='two-sided')
+                _, p_mw_gt = stats.mannwhitneyu(active_vals, other_vals, alternative='greater')
+                
+                w_stat = np.nan
+                p_wilcoxon_gt = np.nan
+                try:
+                    w_stat, p_wilcoxon_gt = stats.wilcoxon(active_vals, other_vals, alternative='greater')
+                except ValueError:
+                    pass
+                
+                mean_active = np.mean(active_vals)
+                mean_other = np.mean(other_vals)
+                supported = (mean_active > mean_other) and (p_wilcoxon_gt < 0.05 if not np.isnan(p_wilcoxon_gt) else False)
+                support_text = "✓ YES" if supported else "✗ NO"
+
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {t_stat:.3f} | {format_pvalue(p_welch_gt)} | "
+                        f"{u_stat:.1f} | {format_pvalue(p_mw_gt)} | "
+                        f"{w_stat:.1f} | {format_pvalue(p_wilcoxon_gt)} | **{support_text}** |\n")
+
+            f.write("\n")
+            
+            # Two-tailed tests (any difference)
+            f.write("### Two-Tailed Tests: Any significant difference\n\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | Significant? |\n")
+            f.write("|------------|-------------------|--------|-----------|---|--------|---|--------------|-------------|\n")
+
+            for other_cond in ['Passive glove', 'No glove']:
+                if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                other_map = subject_means[other_cond][obj_id]
+                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+
+                if len(shared) == 0:
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    continue
+
+                results = test_pairwise_comparison(active_vals, other_vals, 'Active glove', other_cond)
+                sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
 
                 f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
                         f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
-                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{sig_text}** |\n")
 
+            f.write("\n")
+            
+            # Effect sizes
+            f.write("### Effect Size (Cohen's d)\n\n")
+            f.write("| Comparison | Cohen's d | Interpretation | Mean Diff (s) | % Change |\n")
+            f.write("|------------|-----------|----------------|---------------|----------|\n")
+            
+            for other_cond in ['Passive glove', 'No glove']:
+                if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
+                    continue
+                other_map = subject_means[other_cond][obj_id]
+                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
+                if len(shared) == 0:
+                    continue
+                d = cohens_d(active_vals, other_vals)
+                interp = interpret_cohens_d(d)
+                mean_diff = np.mean(active_vals) - np.mean(other_vals)
+                pct_change = (mean_diff / np.mean(other_vals)) * 100 if np.mean(other_vals) != 0 else 0
+                f.write(f"| Active vs {other_cond} | {d:.3f} | {interp} | {mean_diff:+.3f} | {pct_change:+.1f}% |\n")
+            
             f.write("\n---\n\n")
 
     print(f"✓ Saved duration statistics: {report_path}")
@@ -844,6 +949,7 @@ def generate_mvc_statistics():
         f.write(f"**Generated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write("**Metric:** Mean RMS (%MVC) per subject, per object, per condition.\n\n")
         f.write("**Tests:** Welch (one-tailed Active < Other), Mann-Whitney (one-tailed), Wilcoxon paired (Active < Other, subject-matched).\n\n")
+        f.write("**Why Welch's t-test?** Does not assume equal variances between groups (more robust than Student's t-test).\n\n")
         f.write("**Pairing rule:** Wilcoxon uses only subjects present in both conditions for each object.\n\n")
         f.write("---\n\n")
 
@@ -859,6 +965,20 @@ def generate_mvc_statistics():
                     f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - |\n")
+            f.write("\n")
+
+            # Normality tests
+            f.write("### Normality Tests (Shapiro-Wilk)\n\n")
+            f.write("| Condition | W-statistic | p-value | Normal? |\n")
+            f.write("|-----------|-------------|---------|--------|\n")
+            for condition in CONDITIONS:
+                vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
+                if vals and len(vals) >= 3:
+                    w_stat, p_val, is_normal = test_normality(vals, condition)
+                    normal_text = "✓ Yes" if is_normal else "✗ No"
+                    f.write(f"| {condition} | {w_stat:.4f} | {format_pvalue(p_val)} | {normal_text} |\n")
+                else:
+                    f.write(f"| {condition} | - | - | n<3 |\n")
             f.write("\n")
 
             if 'Active glove' not in subject_means or obj_id not in subject_means['Active glove']:
@@ -1380,6 +1500,20 @@ def generate_master_summary():
         
         f.write("## Statistical Testing Approach\n\n")
         
+        f.write("### Why Welch's t-test instead of Student's t-test?\n\n")
+        f.write("We use **Welch's t-test** (not Student's t-test) because:\n\n")
+        f.write("1. **No equal variance assumption:** Student's t-test assumes equal variances (homoscedasticity) between groups, which is often violated in biological data\n")
+        f.write("2. **Robust to unequal sample sizes:** Welch's test performs better when group sizes differ\n")
+        f.write("3. **Conservative:** When variances are actually equal, Welch's test gives similar results to Student's\n")
+        f.write("4. **Recommended default:** Modern statistical guidance recommends Welch's as the default two-sample t-test\n\n")
+        f.write("### Normality Assessment: Shapiro-Wilk Test\n\n")
+        f.write("We use the **Shapiro-Wilk test** to check if data follows a normal distribution:\n\n")
+        f.write("- **H₀:** Data is normally distributed\n")
+        f.write("- **H₁:** Data is not normally distributed\n")
+        f.write("- **Interpretation:** p ≥ 0.05 suggests normality (fail to reject H₀)\n")
+        f.write("- **Note:** Shapiro-Wilk is preferred for small samples (n < 50)\n")
+        f.write("- **When non-normal:** Non-parametric tests (Mann-Whitney, Wilcoxon) are more appropriate\n\n")
+        
         f.write("### Comprehensive Testing Suite\n\n")
         f.write("Each comparison uses multiple statistical tests:\n\n")
         
@@ -1395,7 +1529,12 @@ def generate_master_summary():
         f.write("- **Assumption:** Distribution-free\n")
         f.write("- **Use:** Validate parametric results, robust to outliers\n\n")
         
-        f.write("#### 3. Effect Size: Cohen's d\n")
+        f.write("#### 3. Paired Non-Parametric Test: Wilcoxon signed-rank\n")
+        f.write("- **Type:** Paired rank-based test\n")
+        f.write("- **Assumption:** Matched pairs (same subjects across conditions)\n")
+        f.write("- **Use:** Most appropriate for within-subject comparisons\n\n")
+        
+        f.write("#### 4. Effect Size: Cohen's d\n")
         f.write("- **Metric:** Standardized mean difference\n")
         f.write("- **Interpretation:**\n")
         f.write("  - |d| < 0.2: negligible effect\n")
@@ -1403,7 +1542,7 @@ def generate_master_summary():
         f.write("  - |d| < 0.8: medium effect\n")
         f.write("  - |d| ≥ 0.8: large effect\n\n")
         
-        f.write("#### 4. ANOVA: Three-way comparison\n")
+        f.write("#### 5. ANOVA: Three-way comparison\n")
         f.write("- **Type:** One-way ANOVA\n")
         f.write("- **Use:** Test if any significant difference exists between all three conditions\n")
         f.write("- **Note:** Omnibus test, followed by pairwise comparisons\n\n")

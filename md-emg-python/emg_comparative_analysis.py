@@ -1033,7 +1033,7 @@ class EMGAnalyzer:
         ax.set_xlabel('Sample', fontsize=12)
         ax.set_ylabel('Channel (stacked & normalized)', fontsize=12)
         ax.set_yticks(range(NUM_CHANNELS))
-        ax.set_yticklabels([f'Ch {i}' for i in range(NUM_CHANNELS)])
+        ax.set_yticklabels([f'Ch {i+1}' for i in range(NUM_CHANNELS)])
         ax.grid(True, axis='x', alpha=0.25)
         ax.margins(x=0)
         plt.tight_layout()
@@ -1201,7 +1201,7 @@ class EMGAnalyzer:
         ax.set_xlabel('Channel', fontsize=12)
         ax.set_ylabel('Mean RMS (%MVC)', fontsize=12)
         ax.set_xticks(x)
-        ax.set_xticklabels([f'{ch}' for ch in range(NUM_CHANNELS)], rotation=45)
+        ax.set_xticklabels([f'{ch+1}' for ch in range(NUM_CHANNELS)], rotation=45)
         ax.legend()
         ax.grid(True, axis='y', alpha=0.3)
         plt.tight_layout()
@@ -1233,7 +1233,7 @@ class EMGAnalyzer:
                 cmap='coolwarm',
                 center=0.0,
                 annot=False,
-                xticklabels=[f'{ch}' for ch in range(NUM_CHANNELS)],
+                xticklabels=[f'{ch+1}' for ch in range(NUM_CHANNELS)],
                 yticklabels=diff_labels,
                 ax=ax
             )
@@ -1640,7 +1640,7 @@ class EMGAnalyzer:
         ax_bar.set_ylabel('Mean RMS Amplitude (%MVC)', fontsize=12, fontweight='bold')
         ax_bar.set_title('Channel-wise Amplitude Comparison', fontsize=14, fontweight='bold')
         ax_bar.set_xticks(x[::2])
-        ax_bar.set_xticklabels([f'{ch}' for ch in range(NUM_CHANNELS)][::2])
+        ax_bar.set_xticklabels([f'{ch+1}' for ch in range(NUM_CHANNELS)][::2])
         ax_bar.legend(fontsize=11)
         ax_bar.grid(True, alpha=0.3, axis='y')
         
