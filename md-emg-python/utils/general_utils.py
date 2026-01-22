@@ -65,7 +65,14 @@ def acquisition_arg_parser(description=None):
                         help='Enable ESP32 glove control (0/1). If not specified, uses config file setting.')
 
     parser.add_argument('--control_mode', type=str, default='synchronized',
-                        choices=['unity_only', 'esp32_only', 'synchronized'],
-                        help='Control mode: unity_only (ESP32 independent), esp32_only (no Unity events), synchronized (ESP32 follows Unity) (default: synchronized)')
+                        choices=['unity_only', 'esp32_only', 'synchronized', 'sci_hybrid', 'fsm'],
+                        help='Control mode: unity_only, esp32_only, synchronized, sci_hybrid (for SCI patients), or fsm (for functional tests like BBT) (default: synchronized)')
+
+    parser.add_argument('--sci_mode', type=int, default=None,
+                        help='Enable SCI-specific processing (0/1). Enables spatial filtering, spasticity detection, fatigue compensation.')
+
+    parser.add_argument('--functional_test', type=str, default=None,
+                        choices=['box_and_block', 'peg_test', 'pouring', 'jar_opening'],
+                        help='Functional test type for FSM control mode (default: None)')
 
     return parser.parse_args()

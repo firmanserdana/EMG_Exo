@@ -148,7 +148,14 @@ def bytes_to_integers(
         number_of_channels,
         bytes_in_sample,
         output_milli_volts):
-    number_of_channels *= 2 # dobule the number of channels taken at each call for keeping up with the sampling rate
+    number_of_channels *= 2 # double the number of channels taken at each call for keeping up with the sampling rate
+
+    # Validate we have enough bytes
+    expected_bytes = number_of_channels * bytes_in_sample
+    if sample_from_channels_as_bytes is None:
+        raise Exception("No data received from Sessantaquattro")
+    if len(sample_from_channels_as_bytes) < expected_bytes:
+        raise Exception(f"Incomplete data: received {len(sample_from_channels_as_bytes)} bytes, expected {expected_bytes}")
 
     channel_values = []
     # Separate channels from byte-string. One channel has
@@ -174,8 +181,16 @@ def bytes_to_integers(
 #     channel. Each channel has 'bytes_in_sample' many bytes in it.
 def read_raw_bytes(connection, number_of_all_channels, bytes_in_sample):
     try:
-        buffer_size = number_of_all_channels * bytes_in_sample * 2 # TODO
-        new_bytes = connection.recv(buffer_size)
+        buffer_size = number_of_all_channels * bytes_in_sample * 2 # x2 for two samples per read
+        new_bytes = b''
+        
+        # Loop until we have all bytes (recv may return partial data)
+        while len(new_bytes) < buffer_size:
+            chunk = connection.recv(buffer_size - len(new_bytes))
+            if not chunk:
+                raise Exception("Connection closed by Sessantaquattro")
+            new_bytes += chunk
+            
     except KeyboardInterrupt:
         return None
     except socket.error as e:
@@ -187,17 +202,30 @@ def read_raw_bytes(connection, number_of_all_channels, bytes_in_sample):
 
 
 # Connect to Sessantaquattro's TCP socket and send start command
+# Note: Python acts as TCP SERVER, Sessantaquattro connects as CLIENT
+# The ip_address should be the Sessantaquattro's configured TCP server IP (your laptop's IP on the hotspot)
 def connect_to_sq(ip_address, port, num_channels):    
     try:
         # Create a socket which is used to connect to Sessantaquattro
         sq_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sq_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # setsockopt --> per settare le opzioni della socket
+        sq_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sq_socket.setsockopt(socket.SOL_TCP, socket.TCP_NODELAY, 1)
-        sq_socket.bind((ip_address, port))
+        
+        # Bind to all interfaces or the hotspot interface
+        # The Sessantaquattro connects TO us, so we need to listen on our IP
+        # Try to bind to the specific IP first, fallback to all interfaces
+        bind_ip = ip_address
+        try:
+            sq_socket.bind((bind_ip, port))
+        except OSError:
+            # If binding to specific IP fails, try binding to all interfaces
+            bind_ip = '0.0.0.0'
+            sq_socket.bind((bind_ip, port))
+        
         sq_socket.listen(1) 
-        sq_socket.settimeout(5)  # Set a timeout for accepting connections
+        sq_socket.settimeout(30)  # Increased timeout for connection
 
-        print('Waiting for connection...')
+        print(f'Waiting for connection on {bind_ip}:{port}...')
 
         conn, addr = sq_socket.accept()
         print(f'Connection from address: {addr}')

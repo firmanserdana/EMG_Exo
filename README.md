@@ -1,212 +1,582 @@
-# EMG-Based Hand Control System
+# EMG-Controlled Hand Exoskeleton System
 
-A comprehensive system for processing EMG signals, interpreting hand gestures with machine learning, and providing real-time feedback via visualization and VR interfaces. The system supports hardware-based acquisition with various EMG systems as well as ESP32-based pneumatic gloves for physical hand assistance.
+A comprehensive system for EMG-based hand control with support for functional assessments (Box and Block Test), SCI patient-specific processing, and real-time exoskeleton control via ESP32 pneumatic gloves.
 
-![EMG Visualization Demo](https://via.placeholder.com/800x400?text=EMG+Visualization+Demo)
+## 🎯 Key Features
 
-## System Overview
+### Control Modes
+- **FSM Control** - State-machine control for functional tests (BBT, peg test, pouring)
+- **SCI Hybrid Control** - Trigger-based control with spasticity/fatigue handling
+- **Synchronized Control** - Real-time gesture mirroring to Unity VR and ESP32
+- **Proportional Control** - Standard EMG amplitude-based control
 
-This application consists of five main components:
+### Signal Processing
+- **64-channel HD-sEMG** support via OTB Sessantaquattro
+- **Spatial Filtering** - Laplacian, CAR, bipolar for artifact rejection
+- **Adaptive Filtering** - LMS filter for same-hand EMI suppression
+- **Motion Artifact Detection** - Automatic detection and blanking
 
-1. **EMG Acquisition**: Captures EMG signals from various hardware systems or generates simulated signals
-2. **Signal Processing & Recognition**: Processes EMG signals, extracts features, and classifies gestures using advanced ML models
-3. **Visualization & Data Recording**: Real-time visualization of EMG signals and comprehensive data recording
-4. **VR Integration**: Unity-based VR interface for real-time hand control and feedback
-5. **ESP32 Physical Control**: Real-time control of pneumatic gloves for physical hand assistance
+### Machine Learning Models
+- **CNN-LSTM** - Hybrid spatial-temporal model with electrode dropout robustness
+- **LSTM/TFM/CTFM/CRNN** - Standard temporal models
+- **Transfer Learning** - Pre-train on healthy subjects, fine-tune for patients
 
-## Features
+### SCI Patient Support
+- Spasticity detection and management
+- Fatigue compensation with adaptive thresholds
+- Lower SNR handling with spatial filtering
 
-- **Multiple Hardware Support**:
-  - Sessantaquatro 64-channel EMG system
-  - Delsys Trigno EMG system via network connection
-  - Realistic signal simulation for development without hardware
-- **Advanced Signal Processing**:
-  - Digital filtering (high-pass, low-pass, notch)
-  - Feature extraction (time and frequency domain)
-  - Signal envelope calculation
-  - Muscle activity detection
-  - Real-time spectral analysis
-- **Machine Learning-Based Gesture Recognition**:
-  - Multiple classifier support (kNN, MLP, LSTM, CRNN, TFM)
-  - Automated model training and evaluation
-  - Real-time classification with confidence metrics
-  - Model optimization pipeline
-- **Gesture Support**:
-  - Thumb, index, and middle finger control (flexion, extension, pinching)
-  - Ring and little finger control (flexion, extension)
-  - Thumb abduction
-  - Multi-finger gestures and grasp patterns
-  - Customizable gesture set
-- **Visualization & Data Management**:
-  - Real-time signal plotting with multiple visualization modes
-  - Gesture recognition display with confidence metrics
-  - Interactive controls for gesture simulation
-  - Comprehensive data recording and export (CSV, NPZ, MATLAB)
-  - Spectrogram visualization for frequency analysis
-- **Comparative Analysis Tools**:
-  - Publication-ready figure generation for multi-condition comparisons
-  - Raw EMG signal comparison across conditions
-  - Heatmap visualization of channel activity patterns
-  - PCA analysis for condition separability assessment
-  - Time consumption analysis across experimental conditions
-- **ESP32 Pneumatic Glove Integration**:
-  - Real-time gesture control via TCP/IP communication with persistent connections
-  - Task-specific gesture mapping (open_close, grasp_patterns, single_fingers)
-  - **Button Control Mode**: Simple push button interface to toggle between gesture and relax state
-  - Configurable pressure and speed settings with real-time adjustment
-  - Emergency stop functionality and connection health monitoring
-  - Improved connection stability with automatic reconnection
-  - Heartbeat mechanism for maintaining persistent connections
-  - Auto-discovery of ESP32 devices on network
-  - **Automatic rest state return**: When decoding stops, the system automatically returns both Unity and ESP32 glove to rest/relax state
-- **VR Integration**:
-  - Unity-based VR hand visualization
-  - TCP/IP communication for real-time control
-  - Customizable hand animations and configurations
-  - Training and feedback modes for rehabilitation
-
-## Project Structure
-
-The project is organized with the following major components:
+## 📁 Project Structure
 
 ```
 EMG_Exo/
-├── md-emg-python/           # Advanced EMG processing framework
-│   ├── emg_control_64.py    # 64-channel EMG control system
-│   ├── emg_plot_64.py       # Advanced visualization
-│   ├── emg_comparative_analysis.py  # Multi-condition analysis tool
-│   ├── model_train.py       # ML model training pipeline
-│   ├── model_evaluate.py    # Model evaluation utilities
-│   ├── streaming_gui.py     # Real-time streaming interface
-│   ├── test_esp32.py        # ESP32 connection test tool
-│   ├── ANALYSIS_README.md   # Analysis tool documentation
-│   ├── QUICK_START.md       # Quick start guide for analysis
-│   ├── config/              # Configuration files
-│   │   ├── 64_config.yaml   # 64-channel system configuration
-│   │   ├── esp32_control.yaml # ESP32 glove configuration
-│   │   └── ...              # Other configuration files
-│   ├── realtime_components/ # Real-time processing modules
-│   │   ├── esp32_control.py # ESP32 glove control component
-│   │   └── ...              # Other components
-│   ├── utils/               # Utility functions
-│   └── models/              # ML model implementations
+├── md-emg-python/               # Main Python framework
+│   ├── emg_control_64.py        # Main control script
+│   ├── model_train.py           # Model training
+│   ├── scripts/
+│   │   └── bbt_calibration.py   # BBT calibration workflow
+│   ├── config/
+│   │   ├── functional_tests.yaml    # FSM control settings
+│   │   ├── sci_patient.yaml         # SCI-specific settings
+│   │   ├── esp32_control.yaml       # ESP32 configuration
+│   │   └── models/CNNLSTM_cfg.yaml  # CNN-LSTM config
+│   ├── models/
+│   │   └── cnn_lstm_model.py    # CNN-LSTM implementation
+│   ├── realtime_components/
+│   │   ├── fsm_control.py       # FSM control loop
+│   │   ├── sci_control.py       # SCI hybrid control
+│   │   ├── esp32_control.py     # ESP32 communication
+│   │   └── acquisition.py       # EMG acquisition
+│   └── utils/
+│       ├── signal_filtering.py  # Spatial/adaptive filters
+│       └── transfer_learning.py # Transfer learning utilities
 │
-├── ESP32_Exo/               # ESP32 glove control system
-│   ├── v1/                  # Version 1 (Arduino IDE files)
-│   │   ├── Bilateral_control_WIFI.ino
-│   │   ├── Glove_wifi_controller.py
-│   │   └── ...              # Other Arduino sketches
-│   └── v2/                  # Version 2 (TCP-based control)
-│       ├── Glove_wifi_controller.py
+├── ESP32_Exo/                   # ESP32 firmware
+│   ├── v1/                      # Basic Arduino sketches
+│   └── v2/                      # TCP-based control
 │       └── Bilateral_control_WIFI_V3/
 │
-├── md-emg-VR/               # Unity VR integration
-│   ├── Assets/
-│   │   ├── Scripts/         # C# implementation
-│   │   │   ├── HandController.cs       # Hand movement control
-│   │   │   ├── TcpServerManager.cs     # Communication interface
-│   │   │   └── ...                     # Other components
-│   │   ├── Scenes/          # Unity scenes
-│   │   └── Config/          # Configuration files
-│   └── ...                  # Unity project files
+└── md-emg-VR/                   # Unity VR hand visualization
 ```
 
-## Quick Start Guide
+## 🚀 Quick Start
 
-### 1. Basic Setup
-```bash
-# Clone the repository
-git clone https://github.com/firmanserdana/EMG_Exo.git
-cd EMG_Exo
+### 1. Installation
 
-# Install requirements
-pip install -r md-emg-python/requirements.txt
-```
-
-### 2. Test ESP32 Connection (Optional)
-```bash
-cd md-emg-python
-python test_esp32.py scan               # Auto-discover ESP32 devices
-python test_esp32.py 172.20.10.5       # Test specific IP address
-```
-
-### 3. Run Complete System
-```bash
-# EMG acquisition + decoding + VR + ESP32 control
-python emg_control_64.py --subj-type healthy --subj 0 --task grasp_patterns --decoding-active 1 --esp32-enabled 1
-
-# Start Unity VR application (in parallel)
-# Open md-emg-VR project in Unity Hub and click Play
-```
-
-### 4. Visualization Only
-```bash
-# Real-time EMG visualization
-python emg_plot_64.py
-
-# Streaming GUI
-python streaming_gui.py
-```
-
-See [INSTALLATION.md](INSTALLATION.md) for detailed setup instructions and [FEATURES_GUIDE.md](FEATURES_GUIDE.md) for advanced features.
-
-### Documentation
-
-- [API Documentation](API_DOCUMENTATION.md): Complete API reference
-
-## Prerequisites
-
-- Python 3.8 or higher
-- PyTorch, h5py, dearpygui, and other dependencies in md-emg-python/requirements.txt
-- Optional: Unity 2021.3.13f1 (project target). If using Unity 2022.3+, upgrade the project first.
-- Optional: Sessantaquatro EMG board or other hardware for physical acquisition
-- Optional: ESP32-based pneumatic glove for physical hand assistance
-
-## Installation
-
-1. Clone this repository:
 ```bash
 git clone https://github.com/firmanserdana/EMG_Exo.git
-cd EMG_Exo
+cd EMG_Exo/md-emg-python
+pip install -r requirements.txt
 ```
 
-2. Install the advanced 64-channel system requirements:
+### 2. Network Setup (Hotspot for ESP32 + Sessantaquattro)
+
+Both the ESP32 glove and Sessantaquattro EMG amplifier need to be on the same network as your computer. The easiest way is to create a WiFi hotspot on your laptop.
+
+#### Option A: Use the Setup Script (Linux)
+
 ```bash
-pip install -r md-emg-python/requirements.txt
+# 1. Edit the script with your settings
+nano md-emg-python/setup_hotspot.sh
+
+# Configure these variables:
+# - IFACE: Your WiFi interface (find with 'ip link', e.g., wlp3s0)
+# - SSID: Hotspot name (e.g., "EMG_Lab")
+# - PASS: Password (min 8 characters)
+# - BOARD1_MAC/IP: Sessantaquattro MAC and desired IP
+# - BOARD2_MAC/IP: ESP32 MAC and desired IP
+
+# 2. Run the script
+sudo bash md-emg-python/setup_hotspot.sh
 ```
 
-3. For VR integration, open the Unity project in the `md-emg-VR` folder using Unity Hub
+#### Option B: Manual Setup (Any OS)
 
-4. For ESP32 glove integration, ensure your ESP32 device is running the compatible firmware (see `ESP32_Exo/` folder)
+1. **Create a mobile hotspot** on your laptop:
+   - **Linux**: Settings → Wi-Fi → Turn on Wi-Fi Hotspot
+   - **Windows**: Settings → Network → Mobile hotspot
+   - **macOS**: System Preferences → Sharing → Internet Sharing
 
-## Usage
+2. **Connect devices to hotspot**:
+   - **Sessantaquattro**: Use OTB software to configure WiFi settings
+   - **ESP32**: Update `WiFi.begin("YOUR_SSID", "YOUR_PASSWORD")` in firmware
 
-## Main Applications
+3. **Find device IPs**:
+   ```bash
+   # Scan network for connected devices
+   arp -a
+   # or
+   nmap -sn 192.168.50.0/24
+   ```
+
+4. **Update configuration files**:
+   ```bash
+   # Edit config/64_config.yaml
+   ip_address: "192.168.50.10"  # Sessantaquattro IP
+   
+   # Edit config/esp32_control.yaml
+   ip: "192.168.50.11"  # ESP32 IP
+   ```
+
+#### Recommended Network Configuration
+
+| Device | Static IP | Purpose |
+|--------|-----------|---------|
+| Laptop (Gateway) | 192.168.50.1 | Runs Python scripts |
+| Sessantaquattro | 192.168.50.10 | 64-channel EMG amplifier |
+| ESP32 Glove | 192.168.50.11 | Pneumatic hand control |
+
+#### Verify Connections
 
 ```bash
-cd md-emg-python
+# Test Sessantaquattro
+ping 192.168.50.10
 
-# 1. Complete EMG Control System (with ESP32 support)
-python emg_control_64.py --decoding-active 1 --esp32-enabled 1
-
-# 2. EMG Signal Visualization
-python emg_plot_64.py
-
-# 3. Real-time Streaming GUI
-python streaming_gui.py
-
-# 4. ESP32 Glove Testing
-python test_esp32.py
-
-# 5. Integration Demo
-python integration_demo.py
+# Test ESP32
+python test_esp32.py 192.168.50.11
 ```
 
-### Advanced 64-Channel System
-
-The md-emg-python folder contains scripts for advanced EMG processing with 64-channel systems:
+### 3. Basic EMG Control (Synchronized Mode)
 
 ```bash
+# Standard acquisition + decoding + ESP32 control
+python emg_control_64.py \
+    --subj_type healthy \
+    --subj 1 \
+    --task open_close \
+    --decoding_active 1 \
+    --esp32_enabled 1
+```
+
+### 4. Box and Block Test (FSM Mode)
+
+```bash
+# Step 1: Calibrate (with arm movement for robustness)
+python scripts/bbt_calibration.py --subj 1 --mode full_calibration
+
+# Step 2: Run BBT with FSM control
+python emg_control_64.py \
+    --subj_type SCI \
+    --subj 1 \
+    --task open_close \
+    --control_mode fsm \
+    --functional_test box_and_block \
+    --decoding_active 1 \
+    --esp32_enabled 1
+```
+
+### 5. SCI Patient Mode
+
+---
+
+## 📋 Complete Workflow Summary
+
+This section provides a step-by-step guide from initial setup to real-time control.
+
+### Phase 1: Hardware Setup
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  1. Create WiFi Hotspot on Laptop                           │
+│     └── SSID: "Arlen" (or custom), Password: "12345678"     │
+│                                                             │
+│  2. Connect Devices to Hotspot                              │
+│     ├── Sessantaquattro → 192.168.50.10                     │
+│     └── ESP32 Glove     → 192.168.50.11                     │
+│                                                             │
+│  3. Verify Connections                                      │
+│     ├── ping 192.168.50.10  (Sessantaquattro)               │
+│     └── python test_esp32.py 192.168.50.11                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Phase 2: Data Recording (Open Loop Mode)
+
+Data recording uses **Unity VR for visual cues** - the VR hand shows the gesture to perform while EMG is recorded.
+
+```bash
+# 1. Start Unity VR application (md-emg-VR)
+#    - Select "Open Loop" mode
+#    - Configure: dominant hand, grasping type, number of trials
+
+# 2. Start Python EMG acquisition (in a separate terminal)
+python emg_control_64.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close \
+    --decoding_active 0 \
+    --esp32_enabled 0
+
+# 3. In Unity, press "Play" to start the recording session
+#    - Unity shows visual cues (hand animations)
+#    - Follow the hand movements shown on screen
+#    - Events are automatically timestamped via TCP
+
+# 4. Press Enter in Python terminal when session completes
+# Data saved to: data/SCI/S0/raw/session_XX_emg.pkl
+# Events saved to: data/SCI/S0/raw/session_XX_events.pkl
+```
+
+**Unity Open Loop Trial Flow:**
+```
+┌────────────────────────────────────────────────────────────────┐
+│  1. trial_start         → Trial begins                         │
+│  2. GUI shows gesture name (e.g., "HandClose")                 │
+│  3. grasp_start         → Hand animation starts (follow this!) │
+│  4. grasp_hold_start    → Hold the gesture                     │
+│  5. grasp_hold_end      → Release                              │
+│  6. grasp_released      → Hand returns to rest                 │
+│  7. trial_end           → Trial complete, inter-trial interval │
+│                                                                │
+│  Repeat for all trials (typically 20-30 per class)             │
+│  8. session_end         → All trials complete                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Unity Configuration** (`md-emg-VR/Assets/Config/OpenLoopConfig.json`):
+```json
+{
+  "trialsStartDelay": 2000,      // ms before first trial
+  "trialIntervalDuration": 2500, // ms between trials
+  "cueGraspStartInterval": 1500, // ms cue shown before animation
+  "holdDuration": 2500           // ms to hold the gesture
+}
+```
+
+**Recording Tips:**
+- Follow the VR hand animation closely
+- Keep your arm position consistent throughout
+- The events file contains automatic timestamps for each gesture
+- For BBT: record at different arm positions (down, forward, up)
+
+### Phase 3: Data Labeling (Automatic from Unity Events)
+
+When using Unity Open Loop mode, **labeling is automatic** - the events file contains timestamps for each gesture that are used during training.
+
+```bash
+# Events are automatically saved during recording:
+# data/SCI/S0/raw/session_XX_events.pkl
+#
+# Contains events like:
+# - trial_start, trial_end
+# - grasp_start_0 (HandOpen), grasp_start_1 (HandClose)
+# - grasp_hold_start, grasp_hold_end
+# - session_start, session_end
+
+# Optional: Verify events were recorded correctly
+python utils/view_events.py --subj 0 --subj_type SCI --session 1
+```
+
+**Manual Labeling** (only if not using Unity):
+```bash
+# Option A: Use the GUI labeler
+python utils/data_labeler.py --subj 0 --subj_type SCI
+
+# Option B: Manual labeling in config
+# Edit: config/subjects/SCI_S0_labels.yaml
+```
+
+**Manual Label Format** (if needed):
+```yaml
+session_01:
+  - [0.0, 5.0, "rest"]      # Start, End, Label
+  - [5.0, 8.0, "close"]
+  - [8.0, 12.0, "rest"]
+  - [12.0, 15.0, "open"]
+```
+
+### Phase 4: Model Training
+
+```bash
+# Train LSTM model (default)
+python model_train.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close \
+    --model_type LSTM
+
+# Train CNN-LSTM model (recommended for BBT)
+python model_train.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close \
+    --model_type CNNLSTM
+
+# Model saved to: models-subjects/SCI/S0/open_close/LSTM_open_loop.pth
+```
+
+**Training Options:**
+| Model Type | Best For | Training Time |
+|------------|----------|---------------|
+| `LSTM` | General use | ~5 min |
+| `CNNLSTM` | BBT/FSM control | ~10 min |
+| `TFM` | High accuracy | ~15 min |
+
+### Phase 5: Model Evaluation (Optional)
+
+```bash
+# Evaluate trained model on held-out data
+python model_evaluate.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close
+
+# Results saved to: results-training/SCI/S0/open_close/
+```
+
+### Phase 6: Real-Time Control
+
+```bash
+# Option A: Synchronized Mode (general use)
+python emg_control_64.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close \
+    --decoding_active 1 \
+    --esp32_enabled 1
+
+# Option B: FSM Mode (Box and Block Test)
+python emg_control_64.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close \
+    --control_mode fsm \
+    --functional_test box_and_block \
+    --decoding_active 1 \
+    --esp32_enabled 1
+
+# Option C: SCI Hybrid Mode (trigger-based)
+python emg_control_64.py \
+    --subj 0 \
+    --subj_type SCI \
+    --task open_close \
+    --control_mode sci_hybrid \
+    --decoding_active 1 \
+    --esp32_enabled 1
+```
+
+### Quick Reference: Full Pipeline Commands
+
+```bash
+# === STEP 1: Setup ===
+sudo bash setup_hotspot.sh
+ping 192.168.50.10 && python test_esp32.py 192.168.50.11
+
+# === STEP 2: Record (with Unity VR cues) ===
+# Terminal 1: Start Unity VR → Select "Open Loop" → Configure settings
+# Terminal 2: Start Python acquisition
+python emg_control_64.py --subj 0 --subj_type SCI --task open_close --decoding_active 0
+# In Unity: Press "Play" to start recording with visual cues
+# Follow the hand animations, events are auto-timestamped
+
+# === STEP 3: Train (labels from Unity events) ===
+python model_train.py --subj 0 --subj_type SCI --task open_close --model_type LSTM
+
+# === STEP 4: Run ===
+python emg_control_64.py --subj 0 --subj_type SCI --task open_close --decoding_active 1 --esp32_enabled 1
+```
+
+### Workflow Diagram
+
+```
+┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
+│    HARDWARE      │    │  RECORD EMG +    │    │      TRAIN       │
+│    SETUP         │───▶│  UNITY VR CUES   │───▶│      MODEL       │
+│                  │    │                  │    │                  │
+│ • Hotspot        │    │ • Start Unity VR │    │ • LSTM           │
+│ • Connect SQ     │    │ • Start Python   │    │ • CNN-LSTM       │
+│ • Connect ESP32  │    │ • Follow visual  │    │ • Events → Labels│
+│                  │    │   hand cues      │    │                  │
+└──────────────────┘    └──────────────────┘    └──────────────────┘
+                                                       │
+                              ┌─────────────────────────┘
+                              ▼
+┌──────────────────┐    ┌──────────────────┐
+│   REAL-TIME      │    │    EVALUATE      │
+│   CONTROL        │◀───│    (optional)    │
+│                  │    │                  │
+│ • FSM mode (BBT) │    │ • Accuracy       │
+│ • Sync mode      │    │ • Confusion      │
+│ • SCI hybrid     │    │   matrix         │
+└──────────────────┘    └──────────────────┘
+```
+
+---
+
+### 6. SCI Patient Mode
+
+```bash
+# SCI hybrid control with spasticity detection
+python emg_control_64.py \
+    --subj_type SCI \
+    --subj 1 \
+    --task open_close \
+    --control_mode sci_hybrid \
+    --decoding_active 1 \
+    --esp32_enabled 1
+```
+
+## 📖 How-To Guides
+
+### Train a New Model
+
+```bash
+# 1. Record training data
+python emg_control_64.py --subj 1 --task open_close --decoding_active 0
+
+# 2. Train model
+python model_train.py --subj 1 --task open_close --model_type LSTM
+
+# 3. Run with trained model
+python emg_control_64.py --subj 1 --task open_close --decoding_active 1
+```
+
+### Use CNN-LSTM with Transfer Learning
+
+```bash
+# 1. Pre-train on healthy subjects (done once)
+python scripts/bbt_calibration.py --subj 0 --subj_type healthy --mode full_calibration
+
+# 2. Transfer to new patient with quick calibration
+python scripts/bbt_calibration.py --subj 1 --subj_type SCI --mode quick_calibration \
+    --pretrained models/pretrained/cnnlstm_healthy.pth
+```
+
+### Configure FSM Control Thresholds
+
+Edit `config/functional_tests.yaml`:
+
+```yaml
+fsm_control:
+  flexor_trigger_threshold: 0.40   # Lower = more sensitive
+  extensor_trigger_threshold: 0.35
+  lock_grasp_enabled: true         # Keep hand closed during transport
+  lock_duration_min_ms: 300        # Minimum time before release
+```
+
+### Enable/Disable Features
+
+All features can be toggled in `config/functional_tests.yaml`:
+
+```yaml
+features:
+  use_fsm_control: true           # FSM vs proportional
+  use_grasp_locking: true         # Lock during transport
+  use_cnn_lstm: true              # CNN-LSTM vs standard LSTM
+  use_transfer_learning: true     # Pre-trained weights
+  use_dynamic_training: true      # Train with movement data
+  use_electrode_dropout: true     # Dropout augmentation
+  use_sci_mode: false             # SCI-specific processing
+```
+
+### Test ESP32 Connection
+
+```bash
+# Auto-discover ESP32 devices
+python test_esp32.py scan
+
+# Test specific IP
+python test_esp32.py 192.168.4.1
+```
+
+## 🔧 Control Modes Explained
+
+| Mode | Use Case | Key Feature |
+|------|----------|-------------|
+| `synchronized` | General use | Mirrors gestures to Unity + ESP32 |
+| `fsm` | Functional tests (BBT) | Grasp locking, state-based control |
+| `sci_hybrid` | SCI patients | Trigger-based, handles spasticity |
+| `unity_only` | VR visualization | No ESP32 output |
+| `esp32_only` | Hardware testing | No Unity output |
+
+## 📊 Supported Tasks
+
+| Task | Classes | Description |
+|------|---------|-------------|
+| `open_close` | 3 | Rest, Hand Close, Hand Open |
+| `grasp_patterns` | 4 | Rest, Hook Grasp, Lateral Grasp, Index Point |
+| `single_fingers` | 4 | Rest, Thumb, Index, MRP |
+
+## 🏥 SCI Patient Features
+
+When `--sci_mode 1` or `--subj_type SCI`:
+
+1. **Spatial Filtering**: Laplacian filter reduces same-hand EMI
+2. **Spasticity Detection**: Monitors for involuntary muscle activity
+3. **Fatigue Compensation**: Adapts thresholds over session duration
+4. **Lower SNR Handling**: Optimized for weaker/noisier signals
+
+## 🧪 Functional Tests
+
+### Box and Block Test (BBT)
+- **FSM States**: IDLE → CLOSING → LOCKED_GRASP → OPENING
+- **Grasp Locking**: Hand stays closed during transport phase
+- **Trigger Detection**: Sharp EMG rise detection, not continuous amplitude
+
+### Unity FSM Display
+
+When using FSM mode, Unity shows real-time feedback:
+- **State Indicator**: Color-coded current state (green=IDLE, blue=LOCKED, etc.)
+- **Lock Indicator**: Pulsing visual when grasp is locked during transport
+- **BBT Scoring**: Block count, grasp cycles, and session timer
+
+To set up the Unity display, see [md-emg-VR/Assets/Config/FSM_DISPLAY_SETUP.md](md-emg-VR/Assets/Config/FSM_DISPLAY_SETUP.md).
+
+### Calibration Protocol
+1. Rest baseline (5 trials)
+2. Grasp with arm down (3 trials)
+3. Grasp with arm forward (3 trials)  
+4. Grasp with arm up (3 trials)
+5. Open gestures at each position
+
+## 📝 Command Line Reference
+
+```bash
+python emg_control_64.py [OPTIONS]
+
+Options:
+  --subj_type         Subject type: healthy, SCI (default: SCI)
+  --subj              Subject number (default: 0)
+  --task              Task: open_close, grasp_patterns, single_fingers
+  --decoding_active   Enable ML decoding: 0 or 1 (default: 0)
+  --control_mode      Control mode: synchronized, fsm, sci_hybrid, 
+                      unity_only, esp32_only (default: synchronized)
+  --functional_test   Test type: box_and_block, peg_test, pouring, jar_opening
+  --esp32_enabled     Enable ESP32: 0 or 1 (uses config if not specified)
+  --sci_mode          Force SCI mode: 0 or 1
+  --is_mvc_session    MVC calibration session: 0 or 1
+```
+
+## 📚 Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `config/functional_tests.yaml` | FSM control, BBT settings, feature toggles |
+| `config/sci_patient.yaml` | SCI-specific filter and control settings |
+| `config/esp32_control.yaml` | ESP32 network and gesture mapping |
+| `config/models/CNNLSTM_cfg.yaml` | CNN-LSTM architecture and training |
+| `config/64_config.yaml` | EMG amplifier connection settings |
+
+## 🔬 Hardware Requirements
+
+- **EMG**: OTB Sessantaquattro 64-channel amplifier
+- **Electrodes**: 32-channel HD-sEMG grid (8x4 or 4x8)
+- **Exoskeleton**: ESP32-controlled soft pneumatic hand
+- **Optional**: Unity VR for visualization
+
+## 📄 License
+
+MIT License - See LICENSE file for details.
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request
+
+## 📧 Contact
+
+For questions or collaboration, open an issue on GitHub.
 # Complete EMG control with all outputs (VR + ESP32)
 python md-emg-python/emg_control_64.py --subj-type healthy --subj 0 --task grasp_patterns --decoding-active 1 --esp32-enabled 1
 
