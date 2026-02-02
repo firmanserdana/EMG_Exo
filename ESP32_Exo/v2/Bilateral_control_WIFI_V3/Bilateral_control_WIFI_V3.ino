@@ -35,10 +35,21 @@ const int sda_pin = 21;
 const int scl_pin = 22;
 
 // ==================== Global Variables ====================
-enum ControlMode { WEB_MODE, TCP_MODE, BUTTON_MODE };
+enum ControlMode
+{
+    WEB_MODE,
+    TCP_MODE,
+    BUTTON_MODE
+};
 ControlMode control_mode = WEB_MODE;
 
-enum ControlModeLock { AUTO_MODE, FORCE_WEB_MODE, FORCE_TCP_MODE, FORCE_BUTTON_MODE };
+enum ControlModeLock
+{
+    AUTO_MODE,
+    FORCE_WEB_MODE,
+    FORCE_TCP_MODE,
+    FORCE_BUTTON_MODE
+};
 ControlModeLock mode_lock = AUTO_MODE;
 
 int gesture = 0;
@@ -48,8 +59,7 @@ String finger_states = "000000";
 
 const char *GESTURE_TO_FINGER_STATES_MAP[] = {
     "000000", "111110", "222222", "011110", "111110",
-    "100000", "010000", "001110", "121110"
-};
+    "100000", "010000", "001110", "121110"};
 const int NUM_GESTURES = sizeof(GESTURE_TO_FINGER_STATES_MAP) / sizeof(GESTURE_TO_FINGER_STATES_MAP[0]);
 
 WebServer server(80);
@@ -70,7 +80,7 @@ bool status_changed = true;
 bool sta_connecting = false;
 bool sta_connect_requested = false;
 unsigned long sta_connect_start = 0;
-const unsigned long sta_connect_timeout = 15000;  // 15 seconds timeout
+const unsigned long sta_connect_timeout = 15000; // 15 seconds timeout
 
 unsigned long last_button_press = 0;
 const unsigned long button_debounce_delay = 200;
@@ -94,8 +104,9 @@ const char *html_page = R"rawliteral(
 <html>
 <head>
     <title>ESP32 Glove Control</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <style>
+        * { box-sizing: border-box; touch-action: manipulation; }
         body { font-family: Arial; text-align: center; background: #f0f0f0; margin: 0; padding: 20px; }
         .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
         h1 { color: #333; margin-bottom: 20px; font-size: 24px; }
@@ -134,11 +145,81 @@ const char *html_page = R"rawliteral(
         .pos-label { font-weight: bold; color: #666; margin-bottom: 8px; font-size: 13px; }
         .pos-current { text-align: center; margin: 10px 0; font-size: 15px; }
         .pos-current span { font-weight: bold; color: #007bff; font-size: 18px; }
+        
+        /* Patient Big Button Styles */
+        .patient-button-section {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            padding: 30px 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+        .patient-button-section h3 { color: #e94560; margin: 0 0 20px 0; }
+        .big-patient-button {
+            width: 200px; height: 200px;
+            border-radius: 50%;
+            background: linear-gradient(145deg, #e94560, #c73b54);
+            border: none;
+            box-shadow: 
+                0 15px 35px rgba(233,69,96,0.4),
+                0 5px 15px rgba(0,0,0,0.3),
+                inset 0 -8px 20px rgba(0,0,0,0.2),
+                inset 0 8px 20px rgba(255,255,255,0.1);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center; justify-content: center;
+            flex-direction: column;
+            transition: all 0.1s ease;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .big-patient-button:active {
+            transform: scale(0.95);
+            box-shadow: 
+                0 5px 15px rgba(233,69,96,0.3),
+                0 2px 8px rgba(0,0,0,0.2),
+                inset 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .big-patient-button:disabled {
+            background: linear-gradient(145deg, #666, #555);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            cursor: not-allowed;
+        }
+        .big-patient-button .icon { font-size: 50px; color: white; text-shadow: 0 4px 10px rgba(0,0,0,0.3); }
+        .big-patient-button .text { font-size: 20px; color: white; font-weight: bold; margin-top: 8px; letter-spacing: 2px; }
+        .patient-status { color: #94b4c1; margin-top: 15px; font-size: 14px; }
+        .patient-status span { color: #00ff88; font-weight: bold; }
+        .patient-feedback {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            background: rgba(0,255,136,0.95); color: #1a1a2e;
+            padding: 30px 60px; border-radius: 15px;
+            font-size: 28px; font-weight: bold;
+            pointer-events: none; opacity: 0;
+            transition: all 0.2s ease;
+            z-index: 1000;
+        }
+        .patient-feedback.show {
+            transform: translate(-50%, -50%) scale(1);
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>ESP32 Glove Control</h1>
+        
+        <!-- Patient Big Button Section - Always visible for easy access -->
+        <div class="patient-button-section">
+            <h3>🎯 Patient Control Button</h3>
+            <button class="big-patient-button" id="patientButton" ontouchstart="patientPress(event)" onmousedown="patientPress(event)">
+                <span class="icon">👆</span>
+                <span class="text">PRESS</span>
+            </button>
+            <div class="patient-status">
+                Mode: <span id="patient-mode">--</span> | 
+                Position: <span id="patient-position">0</span> |
+                Gesture: <span id="patient-gesture">--</span>
+            </div>
+        </div>
         
         <div class="section">
             <h3>System Status</h3>
@@ -316,9 +397,58 @@ const char *html_page = R"rawliteral(
             <button class="btn-danger" onclick="emergencyStop()" style="font-size: 16px; padding: 12px 24px;">EMERGENCY STOP</button>
         </div>
     </div>
+    
+    <div class="patient-feedback" id="patientFeedback">✓ SENT!</div>
 
     <script>
         const gestureNames = ["Relax", "HandClose", "HandOpen", "HookGrasp", "LateralGrasp", "ThumbFlex", "IndexFlex", "MRPFlex", "IndexPoint"];
+        let lastPatientPress = 0;
+        const patientDebounceMs = 200;
+        
+        // Audio context for button sound
+        let audioCtx = null;
+        function playBeep() {
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = 800;
+                osc.type = 'sine';
+                gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+                osc.start(audioCtx.currentTime);
+                osc.stop(audioCtx.currentTime + 0.15);
+            } catch(e) {}
+        }
+        
+        function patientPress(e) {
+            e.preventDefault();
+            
+            const now = Date.now();
+            if (now - lastPatientPress < patientDebounceMs) return;
+            lastPatientPress = now;
+            
+            playBeep();
+            
+            fetch('/web-button-press')
+                .then(response => response.json())
+                .then(data => {
+                    showPatientFeedback(data.gesture || 'OK');
+                    setTimeout(updateStatus, 100);
+                })
+                .catch(err => {
+                    showPatientFeedback('SENT');
+                });
+        }
+        
+        function showPatientFeedback(text) {
+            const fb = document.getElementById('patientFeedback');
+            fb.textContent = '✓ ' + text;
+            fb.classList.add('show');
+            setTimeout(() => fb.classList.remove('show'), 400);
+        }
         
         function updateStatus() {
             fetch('/status')
@@ -337,6 +467,25 @@ const char *html_page = R"rawliteral(
                     }
                     
                     document.getElementById('button-mode-config').style.display = data.mode === 'BUTTON' ? 'block' : 'none';
+                    
+                    // Update patient button status
+                    const patientBtn = document.getElementById('patientButton');
+                    const patientMode = document.getElementById('patient-mode');
+                    patientMode.textContent = data.mode;
+                    
+                    if (data.mode === 'BUTTON') {
+                        patientBtn.disabled = false;
+                        patientBtn.querySelector('.text').textContent = 'PRESS';
+                    } else {
+                        patientBtn.disabled = false; // Keep enabled, will auto-switch to BUTTON mode
+                        patientBtn.querySelector('.text').textContent = 'PRESS';
+                    }
+                    
+                    if (data.button_config) {
+                        document.getElementById('patient-position').textContent = data.button_config.position;
+                        const gestureIdx = data.button_config.gestures[data.button_config.position];
+                        document.getElementById('patient-gesture').textContent = gestureNames[gestureIdx] || 'Unknown';
+                    }
                     
                     const staDot = document.getElementById('sta-dot');
                     const staStatus = document.getElementById('sta-status');
@@ -519,8 +668,8 @@ void loop()
     // Handle all communication interfaces (non-blocking)
     server.handleClient();
     handleTCPCommands();
-    handleSTAConnection();  // NEW: Non-blocking STA connection handler
-    
+    handleSTAConnection(); // NEW: Non-blocking STA connection handler
+
     // Button bridge polling (fast response)
     pollButtonBridgeInterfaces();
 
@@ -529,7 +678,8 @@ void loop()
     {
         Serial.println("TCP timeout");
         tcp_connected = false;
-        if (mode_lock == AUTO_MODE) control_mode = WEB_MODE;
+        if (mode_lock == AUTO_MODE)
+            control_mode = WEB_MODE;
         tcpClient.stop();
         status_changed = true;
     }
@@ -538,7 +688,8 @@ void loop()
     {
         Serial.println("TCP disconnected");
         tcp_connected = false;
-        if (mode_lock == AUTO_MODE) control_mode = WEB_MODE;
+        if (mode_lock == AUTO_MODE)
+            control_mode = WEB_MODE;
         tcpClient.stop();
         status_changed = true;
     }
@@ -640,12 +791,12 @@ void pollButtonBridgeInterfaces()
 
     // Activity timeout tracking
     unsigned long now = millis();
-    if (button_bridge_serial_enabled && last_button_bridge_serial_activity > 0 && 
+    if (button_bridge_serial_enabled && last_button_bridge_serial_activity > 0 &&
         now - last_button_bridge_serial_activity > button_bridge_activity_timeout)
     {
         last_button_bridge_serial_activity = 0;
     }
-    if (button_bridge_wifi_enabled && last_button_bridge_wifi_activity > 0 && 
+    if (button_bridge_wifi_enabled && last_button_bridge_wifi_activity > 0 &&
         now - last_button_bridge_wifi_activity > button_bridge_activity_timeout)
     {
         last_button_bridge_wifi_activity = 0;
@@ -660,8 +811,10 @@ void pollButtonBridgeInterfaces()
 bool extractButtonCommandValue(const String &normalized, int &value)
 {
     int delimiterIndex = normalized.indexOf(':');
-    if (delimiterIndex < 0) delimiterIndex = normalized.indexOf('=');
-    if (delimiterIndex < 0) delimiterIndex = normalized.indexOf(' ');
+    if (delimiterIndex < 0)
+        delimiterIndex = normalized.indexOf('=');
+    if (delimiterIndex < 0)
+        delimiterIndex = normalized.indexOf(' ');
 
     if (delimiterIndex > 0 && delimiterIndex < normalized.length() - 1)
     {
@@ -675,7 +828,8 @@ void processButtonCommand(const String &rawCommand, const char *source)
 {
     String command = rawCommand;
     command.trim();
-    if (command.length() == 0) return;
+    if (command.length() == 0)
+        return;
 
     unsigned long now = millis();
     last_button_bridge_activity = now;
@@ -759,7 +913,7 @@ void advanceButtonCycle(const char *source)
 void setButtonPosition(int position, const char *source)
 {
     position = constrain(position, 0, 2);
-    
+
     if (button_cycle_mode == 2 && position > 1)
     {
         position = 0;
@@ -807,11 +961,12 @@ void initNetworks()
     Serial.println("TCP server ready");
 
     // Setup web server endpoints
-    server.on("/", []() { server.send(200, "text/html", html_page); });
+    server.on("/", []()
+              { server.send(200, "text/html", html_page); });
 
     // NEW: STA connection endpoint
     server.on("/sta-connect", []()
-    {
+              {
         if (!sta_connecting && WiFi.status() != WL_CONNECTED)
         {
             sta_connect_requested = true;
@@ -825,11 +980,10 @@ void initNetworks()
         else
         {
             server.send(200, "text/plain", "Connection in progress");
-        }
-    });
+        } });
 
     server.on("/status", []()
-    {
+              {
         StaticJsonDocument<1024> json_doc;
         char json_buffer[1024];
 
@@ -873,42 +1027,38 @@ void initNetworks()
         buttonConfig["position"] = button_cycle_position;
 
         serializeJson(json_doc, json_buffer);
-        server.send(200, "application/json", json_buffer); 
-    });
+        server.send(200, "application/json", json_buffer); });
 
     server.on("/gesture", []()
-    {
+              {
         if (control_mode == WEB_MODE && server.hasArg("value")) {
             gesture = sanitizeGestureId(server.arg("value").toInt());
             Serial.println("Web: gesture=" + String(gesture));
             status_changed = true;
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/pressure", []()
-    {
+              {
         if (control_mode == WEB_MODE && server.hasArg("flex") && server.hasArg("ext")) {
             pressure[0] = constrain(server.arg("flex").toInt(), 0, 100);
             pressure[1] = constrain(server.arg("ext").toInt(), 0, 100);
             Serial.printf("Web: pressure=%d:%d\n", pressure[0], pressure[1]);
             status_changed = true;
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/speed", []()
-    {
+              {
         if (control_mode == WEB_MODE && server.hasArg("value")) {
             speed = constrain(server.arg("value").toInt(), 0, 4);
             Serial.println("Web: speed=" + String(speed));
             status_changed = true;
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/fingers", []()
-    {
+              {
         if (control_mode == WEB_MODE && server.hasArg("value")) {
             String states = server.arg("value");
             if (states.length() == 6) {
@@ -917,11 +1067,10 @@ void initNetworks()
                 status_changed = true;
             }
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/mode", []()
-    {
+              {
         if (server.hasArg("value")) {
             String mode = server.arg("value");
             mode.toUpperCase();
@@ -963,17 +1112,15 @@ void initNetworks()
             }
             status_changed = true;
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/stop", []()
-    {
+              {
         emergencyStop();
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/button-cycle-mode", []()
-    {
+              {
         if (server.hasArg("value")) {
             int mode = server.arg("value").toInt();
             if (mode == 2 || mode == 3) {
@@ -985,11 +1132,10 @@ void initNetworks()
                 status_changed = true;
             }
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/button-position", []()
-    {
+              {
         if (server.hasArg("pos") && server.hasArg("gesture")) {
             int pos = server.arg("pos").toInt();
             int gest = server.arg("gesture").toInt();
@@ -1002,15 +1148,47 @@ void initNetworks()
                 status_changed = true;
             }
         }
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
 
     server.on("/button-reset", []()
-    {
+              {
         setButtonPosition(0, "WEB");
         status_changed = true;
-        server.send(200, "text/plain", "OK"); 
-    });
+        server.send(200, "text/plain", "OK"); });
+
+    // Web GUI big button press endpoint - works like physical button
+    server.on("/web-button-press", []()
+              {
+        // Auto-switch to BUTTON mode if not already
+        if (control_mode != BUTTON_MODE)
+        {
+            mode_lock = FORCE_BUTTON_MODE;
+            control_mode = BUTTON_MODE;
+            if (tcp_connected)
+            {
+                tcpClient.stop();
+                tcp_connected = false;
+            }
+            Serial.println("Web: Auto-switched to BUTTON mode");
+        }
+        
+        // Advance the button cycle (same as physical button press)
+        advanceButtonCycle("WEB-GUI");
+        
+        // Respond with current gesture info
+        StaticJsonDocument<256> json_doc;
+        char json_buffer[256];
+        
+        const char* gestureNames[] = {"Relax", "HandClose", "HandOpen", "HookGrasp", 
+                                       "LateralGrasp", "ThumbFlex", "IndexFlex", "MRPFlex", "IndexPoint"};
+        
+        json_doc["status"] = "ok";
+        json_doc["position"] = button_cycle_position;
+        json_doc["gesture"] = gestureNames[gesture];
+        json_doc["gesture_id"] = gesture;
+        
+        serializeJson(json_doc, json_buffer);
+        server.send(200, "application/json", json_buffer); });
 
     server.begin();
     Serial.println("Web server ready");
@@ -1025,9 +1203,9 @@ void handleSTAConnection()
         sta_connecting = true;
         sta_connect_start = millis();
         sta_connect_requested = false;
-        
+
         Serial.println("Starting STA connection...");
-        WiFi.mode(WIFI_AP_STA);  // Switch to dual mode
+        WiFi.mode(WIFI_AP_STA); // Switch to dual mode
         WiFi.begin(sta_ssid, sta_password);
     }
 
@@ -1035,21 +1213,21 @@ void handleSTAConnection()
     if (sta_connecting)
     {
         wl_status_t status = WiFi.status();
-        
+
         if (status == WL_CONNECTED)
         {
             sta_connecting = false;
             Serial.println("STA connected!");
             Serial.print("STA IP: ");
             Serial.println(WiFi.localIP());
-            
+
             // TCP server is already running, it will now accept on both interfaces
         }
         else if (millis() - sta_connect_start > sta_connect_timeout)
         {
             sta_connecting = false;
             Serial.println("STA connection timeout");
-            WiFi.mode(WIFI_AP);  // Revert to AP-only mode
+            WiFi.mode(WIFI_AP); // Revert to AP-only mode
         }
         // Otherwise, connection is still in progress (non-blocking)
     }
@@ -1085,7 +1263,8 @@ void handleTCPCommands()
     {
         if (mode_lock != FORCE_WEB_MODE)
         {
-            if (tcpClient) tcpClient.stop();
+            if (tcpClient)
+                tcpClient.stop();
 
             tcpClient = tcpServer.available();
             if (tcpClient)
@@ -1143,7 +1322,8 @@ void handleTCPCommands()
 void parseAndExecuteTCPCommand(String command)
 {
     command.trim();
-    if (command.length() == 0) return;
+    if (command.length() == 0)
+        return;
 
     last_tcp_command = millis();
 
@@ -1257,7 +1437,8 @@ void gestureToFingerStates()
 
 void setFingerStates()
 {
-    if (finger_states.length() != 6) return;
+    if (finger_states.length() != 6)
+        return;
 
     for (int i = 0; i < 5; i++)
     {
@@ -1297,7 +1478,8 @@ void setFingerStates()
 
 void setPressureDAC()
 {
-    if (!dac_available) return;
+    if (!dac_available)
+        return;
 
     int flex_dac = (pressure[0] * 4095) / 100;
     int ext_dac = (pressure[1] * 4095) / 100;
@@ -1308,7 +1490,8 @@ void setPressureDAC()
 
 void setSpeedDAC()
 {
-    if (!dac_available) return;
+    if (!dac_available)
+        return;
 
     int valueC = 0, valueD = 0;
 

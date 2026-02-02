@@ -16,8 +16,6 @@ from realtime_components.decoding import *
 from realtime_components.control import *
 from realtime_components.streaming import *
 from realtime_components.esp32_control import ESP32ControlLoop
-from realtime_components.sci_control import SCIControlLoop
-from realtime_components.fsm_control import FSMControlLoop
 from utils.signal_filtering import *
 from utils.communication_64 import *
 from utils.network_utils import *
@@ -100,8 +98,6 @@ if __name__ == "__main__":
     is_mvc_session = args.is_mvc_session
     esp32_enabled_override = args.esp32_enabled
     control_mode = args.control_mode
-    sci_mode_override = args.sci_mode
-    functional_test = args.functional_test if hasattr(args, 'functional_test') else None
 
     subj_id = f'S{subj}'
 
@@ -133,71 +129,6 @@ if __name__ == "__main__":
 
     with open(os.path.join(config_folder, 'esp32_control.yaml')) as f:
         esp32_cfg = yaml.load(f, Loader=yaml.FullLoader)
-
-    # Load SCI-specific configuration
-    sci_cfg = None
-    sci_enabled = False
-    
-    # Determine if SCI mode should be enabled
-    # 1. Explicit command line override
-    # 2. Control mode is sci_hybrid
-    # 3. Subject type is SCI (auto-enable)
-    if sci_mode_override is not None:
-        sci_enabled = bool(sci_mode_override)
-    elif control_mode == 'sci_hybrid':
-        sci_enabled = True
-    elif subj_type == 'SCI':
-        sci_enabled = True  # Auto-enable for SCI patients
-    
-    if sci_enabled:
-        sci_config_path = os.path.join(config_folder, 'sci_patient.yaml')
-        if os.path.exists(sci_config_path):
-            with open(sci_config_path) as f:
-                sci_cfg = yaml.load(f, Loader=yaml.FullLoader)
-            print("\n" + "="*60)
-            print("🏥 SCI MODE ENABLED")
-            print("="*60)
-            print("  ✓ Spatial filtering (Laplacian/CAR) for EMI reduction")
-            print("  ✓ Motion artifact detection and suppression")
-            print("  ✓ Spasticity detection and management")
-            print("  ✓ Fatigue compensation with adaptive thresholds")
-            if control_mode == 'sci_hybrid':
-                print("  ✓ Hybrid control mode (trigger-based, robot trajectory)")
-            print("="*60 + "\n")
-        else:
-            print(f"Warning: SCI config file not found at {sci_config_path}")
-            sci_enabled = False
-
-    # Load FSM control configuration (for functional tests)
-    fsm_cfg = None
-    fsm_enabled = control_mode == 'fsm'
-    
-    if fsm_enabled:
-        fsm_config_path = os.path.join(config_folder, 'functional_tests.yaml')
-        if os.path.exists(fsm_config_path):
-            with open(fsm_config_path) as f:
-                fsm_cfg = yaml.load(f, Loader=yaml.FullLoader)
-            
-            # Set active test if provided via command line
-            if functional_test:
-                fsm_cfg['active_test'] = functional_test
-            
-            print("\n" + "="*60)
-            print("🧪 FSM CONTROL MODE ENABLED")
-            print("="*60)
-            print(f"  Active Test: {fsm_cfg.get('active_test', 'box_and_block')}")
-            print("  ✓ State-based control (IDLE → CLOSING → LOCKED → OPENING)")
-            print("  ✓ Grasp locking during transport phase")
-            print("  ✓ Trigger-based activation (sharp EMG rise detection)")
-            if fsm_cfg.get('cnn_lstm_model', {}).get('enabled', False):
-                print("  ✓ CNN-LSTM model for robust decoding")
-            if fsm_cfg.get('transfer_learning', {}).get('enabled', False):
-                print("  ✓ Transfer learning enabled")
-            print("="*60 + "\n")
-        else:
-            print(f"Warning: FSM config file not found at {fsm_config_path}")
-            fsm_enabled = False
-            control_mode = 'synchronized'  # Fall back to synchronized mode
 
     # Override ESP32 enabled setting if specified via command line
     if esp32_enabled_override is not None:
@@ -235,11 +166,7 @@ if __name__ == "__main__":
 
     # controlling variable and queues initialization
     stop_program = Value('b', False)
-    
-    # In FSM mode, start decoding immediately without waiting for Unity trigger
-    # In other modes, wait for Unity to send 'decoding_start' event
-    auto_start_decoding = control_mode == 'fsm' and decoding_active
-    is_decoding = Value('b', auto_start_decoding)  # variable to control when the decoding is active
+    is_decoding = Value('b', False) # variable to control when the decoding is active
 
     events_queue = Queue()
     unity_events_queue = Queue() if (decoding_active and esp32_cfg['enabled']) else None
@@ -275,8 +202,7 @@ if __name__ == "__main__":
         'notch': emg_proc_cfg['notch'] if 'notch' in emg_proc_cfg else False,
         'bandpass': emg_proc_cfg['bandpass'] if 'bandpass' in emg_proc_cfg else False,
         'streaming_active': streaming_active,
-        'proc_interval': emg_proc_cfg['processing_interval'],
-        'sci_config': sci_cfg if sci_enabled else {}  # SCI-specific configuration
+        'proc_interval': emg_proc_cfg['processing_interval']
     }
 
     if features_cfg['normalization'] == 'mvc':
@@ -328,13 +254,7 @@ if __name__ == "__main__":
             'proc_interval': emg_proc_cfg['processing_interval'],
             'use_consec_pred': decoding_cfg['use_consec_pred'],
             'control_mode': control_mode,
-            'task': task,
-            'num_channels': num_channels_emg,
-            'fsample': fsample,
-            'sci_enabled': sci_enabled,
-            'sci_config': sci_cfg if sci_enabled else None,
-            'fsm_enabled': fsm_enabled,
-            'fsm_config': fsm_cfg if fsm_enabled else None
+            'task': task
         }
 
         if decoding_cfg['use_consec_pred']:
@@ -391,52 +311,17 @@ if __name__ == "__main__":
             target=DecodingLoop, 
             args=(acq_params, dec_params, dec_queue, pred_control_queue, pred_save_queue, stop_program, stream_queue)
         )
-        
-        # Choose control loop based on mode (FSM vs SCI hybrid vs standard)
-        if control_mode == 'fsm' and fsm_enabled:
-            # Use FSM control loop for functional tests (BBT, etc.)
-            p_control = Process(
-                target=FSMControlLoop, 
-                args=(
-                    events_socket,
-                    control_params,
-                    pred_control_queue,
-                    stop_program,
-                    pred_esp32_queue,
-                    unity_events_queue,
-                    fsm_cfg,
-                )
+        p_control = Process(
+            target=ControlLoop, 
+            args=(
+                events_socket,
+                control_params,
+                pred_control_queue,
+                stop_program,
+                pred_esp32_queue,
+                unity_events_queue,
             )
-            print("Using FSM control loop for functional tests")
-        elif control_mode == 'sci_hybrid' and sci_enabled:
-            # Use SCI-specific control loop with hybrid control
-            p_control = Process(
-                target=SCIControlLoop, 
-                args=(
-                    events_socket,
-                    control_params,
-                    pred_control_queue,
-                    stop_program,
-                    pred_esp32_queue,
-                    unity_events_queue,
-                    sci_cfg,
-                )
-            )
-            print("Using SCI hybrid control loop")
-        else:
-            # Use standard control loop
-            p_control = Process(
-                target=ControlLoop, 
-                args=(
-                    events_socket,
-                    control_params,
-                    pred_control_queue,
-                    stop_program,
-                    pred_esp32_queue,
-                    unity_events_queue,
-                )
-            )
-        
+        )
         p_pred_save = Thread(
             target=StorePredictionLoop, 
             args=(pred_save_queue, pred_save_file_name, stop_program)
