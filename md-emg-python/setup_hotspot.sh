@@ -11,11 +11,11 @@ PASS="12345678"       # Wi-Fi Password (min 8 chars)
 GATEWAY_IP="192.168.50.1/24"   # The laptop's IP in the hotspot
 
 # Sessantaquattro EMG Amplifier Configuration
-BOARD1_MAC="58:2B:0A:A6:2F:CC" # Sessantaquattro (Texas Instruments)
+BOARD1_MAC="0C:B2:B7:07:98:11" # Sessantaquattro (Texas Instruments)
 BOARD1_IP="192.168.50.10"
 
 # ESP32 Glove Controller Configuration  
-BOARD2_MAC="A0:B7:65:46:83:20" # ESP32 (Espressif)
+BOARD2_MAC="68:FE:71:0C:22:54" # ESP32 (Espressif)
 BOARD2_IP="192.168.50.11"
 # ==========================================
 

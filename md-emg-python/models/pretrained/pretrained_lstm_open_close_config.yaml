@@ -1,0 +1,27 @@
+batch_size: 64
+best_val_acc: 0.6123432979749277
+best_val_loss: 0.6716598119677567
+conditions:
+- no_glove
+- passive_glove
+- active_glove
+epochs: 150
+lr: 0.0005
+model_type: LSTM
+n_channels: 32
+overlap_ms: 100
+subjects:
+- S1
+- S2
+- S3
+- S4
+- S5
+- S6
+- S7
+- S8
+- S9
+- S10
+task: open_close
+total_segments: 86
+total_windows: 25924
+window_ms: 200

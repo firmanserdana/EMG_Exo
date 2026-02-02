@@ -1,2 +1,2 @@
-ip_address: "192.168.50.1" # Laptop hotspot IP (Sessantaquattro connects TO this)
+ip_address: "192.168.50.10" # Laptop hotspot IP (Sessantaquattro connects TO this)
 port: 45454
