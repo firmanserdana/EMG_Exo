@@ -2756,7 +2756,7 @@ class EMGAnalyzer:
         return df
     
     def _plot_mvc_by_object(self, df: pd.DataFrame, condition_order: List[str]):
-        """Plot %MVC comparison by object with grouped bars"""
+        """Plot %MVC comparison by object with box plots"""
         fig, axes = plt.subplots(1, 2, figsize=(18, 7))
         
         # Define colors for conditions
@@ -2766,40 +2766,37 @@ class EMGAnalyzer:
             'Active glove': '#2ca02c'    # Green
         }
         
-        # Left plot: Grouped bar chart by object
+        # Left plot: Box plot by object and condition
         ax = axes[0]
         
-        # Calculate mean %MVC per condition per object
-        summary = df.groupby(['Object', 'Condition'])['%MVC'].agg(['mean', 'std']).reset_index()
+        # Prepare data for box plot
+        df_plot = df.copy()
+        df_plot['Condition'] = pd.Categorical(df_plot['Condition'], categories=condition_order, ordered=True)
         
-        objects = sorted(df['Object'].unique())
-        x = np.arange(len(objects))
-        width = 0.25
+        # Create box plot with hue for conditions
+        objects_sorted = sorted(df['Object'].unique())
+        sns.boxplot(data=df_plot, x='Object', y='%MVC', hue='Condition',
+                   order=objects_sorted,
+                   hue_order=condition_order,
+                   palette=colors, ax=ax)
         
-        for i, condition in enumerate(condition_order):
-            cond_data = summary[summary['Condition'] == condition]
-            means = []
-            stds = []
-            for obj in objects:
-                obj_data = cond_data[cond_data['Object'] == obj]
-                if len(obj_data) > 0:
-                    means.append(obj_data['mean'].values[0])
-                    stds.append(obj_data['std'].values[0])
-                else:
-                    means.append(0)
-                    stds.append(0)
-            
-            offset = (i - 1) * width
-            bars = ax.bar(x + offset, means, width, yerr=stds, 
-                         label=condition, color=colors.get(condition, '#333'),
-                         capsize=3, alpha=0.85, edgecolor='black', linewidth=0.5)
+        # Add star markers for mean values
+        n_conditions = len(condition_order)
+        width = 0.8 / n_conditions  # Width of each box
+        for i, obj in enumerate(objects_sorted):
+            for j, cond in enumerate(condition_order):
+                data = df_plot[(df_plot['Object'] == obj) & (df_plot['Condition'] == cond)]['%MVC']
+                if len(data) > 0:
+                    mean_val = data.mean()
+                    # Calculate x position: center of object group + offset for each condition
+                    x_pos = i + (j - (n_conditions - 1) / 2) * width
+                    ax.scatter(x_pos, mean_val, marker='*', s=150, color='white', 
+                              edgecolor='black', linewidth=1.5, zorder=10)
         
         ax.set_xlabel('Object', fontsize=13, fontweight='bold')
         ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
-        ax.set_title('%MVC by Object and Condition', fontsize=15, fontweight='bold')
-        ax.set_xticks(x)
-        ax.set_xticklabels([f'Object {i}' for i in objects], fontsize=11)
-        ax.legend(fontsize=11, loc='upper right')
+        ax.set_title('%MVC by Object and Condition (Box Plot)', fontsize=15, fontweight='bold')
+        ax.legend(fontsize=11, loc='upper right', title='Condition')
         ax.grid(True, alpha=0.3, axis='y')
         ax.set_ylim(bottom=0)
         
@@ -2811,6 +2808,15 @@ class EMGAnalyzer:
         
         sns.boxplot(data=df_plot, x='Condition', y='%MVC', 
                    order=condition_order, palette=colors, ax=ax)
+        
+        # Add star markers for mean values
+        for i, cond in enumerate(condition_order):
+            cond_data = df_plot[df_plot['Condition'] == cond]['%MVC']
+            if len(cond_data) > 0:
+                mean_val = cond_data.mean()
+                ax.scatter(i, mean_val, marker='*', s=150, color='white', 
+                          edgecolor='black', linewidth=1.5, zorder=10)
+        
         ax.set_title('Overall %MVC by Condition', fontsize=15, fontweight='bold')
         ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
         ax.set_xlabel('Condition', fontsize=13, fontweight='bold')
