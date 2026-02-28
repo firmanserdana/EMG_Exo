@@ -54,3 +54,28 @@ public class MVCConfig
     public int trialsStartDelay; // amount of time to wait before starting the MVC [ms]
     public int MVCDuration; // [s] duration of the MVC
 }
+
+[Serializable]
+public class BBTConfig
+{
+    public int sessionDuration;         // Total session time limit [ms]
+    public int trialsStartDelay;        // Delay before first trial [ms]
+    public int graspCloseDuration;      // Duration of hand-close animation [ms]
+    public int graspOpenDuration;       // Duration of hand-open animation [ms]
+    public int holdDuration;            // Hold grasped block duration [ms]
+    public int moveDuration;            // Duration for moving block across partition [ms]
+    public int placePauseDuration;      // Pause after placing block [ms]
+    public int interTrialInterval;      // Interval between trials [ms]
+    public float blockSize;             // Size of each block cube [m]
+    public int numberOfBlocks;          // Total blocks in source zone
+    public float boxWidth;              // Box total width [m]
+    public float boxDepth;              // Box total depth [m]
+    public float boxHeight;             // Box base height [m]
+    public float partitionHeight;       // Partition wall height [m]
+    public float blockSpawnAreaWidth;   // Spawn area width in source zone [m]
+    public float blockSpawnAreaDepth;   // Spawn area depth in source zone [m]
+    public float handMoveHeight;        // Hand arc height when moving blocks [m]
+    public float handMoveSpeed;         // Hand movement speed
+    public string[] graspLabels;        // ["HandClose", "HandOpen"]
+    public int[] graspIDs;              // [1, 0] matching open-close IDs
+}

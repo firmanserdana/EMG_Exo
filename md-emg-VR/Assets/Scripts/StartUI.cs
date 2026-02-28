@@ -8,7 +8,8 @@ public enum AcquisitionType
     OpenLoop,
     ClosedLoop,
     MVC,
-    DecodingFeedback
+    DecodingFeedback,
+    BBT
 }
 
 public enum GraspingType
@@ -44,6 +45,7 @@ public class StartUI : MonoBehaviour
     readonly static string closedLoopSceneName = "graspingClosedLoop";
     readonly static string mvcSceneName = "graspingMVC";
     readonly static string decodingFeedbackSceneName = "graspingFeedback";
+    readonly static string bbtSceneName = "graspingBBT";
 
     // GUI Elements
     public TMP_Dropdown acquisitionType, graspingType, dominantHand;
@@ -72,6 +74,12 @@ public class StartUI : MonoBehaviour
 
         json = File.ReadAllText(Path.Combine(configPath, "MVCConfig.json"));
         MVCSessionConfig = JsonUtility.FromJson<MVCConfig>(json);
+
+        // Populate acquisition type dropdown from enum so new types (BBT) appear automatically
+        acquisitionType.ClearOptions();
+        acquisitionType.AddOptions(new System.Collections.Generic.List<string>(
+            System.Enum.GetNames(typeof(AcquisitionType))
+        ));
 
         // Setup GUI
         ClosedLoopParameters.SetActive(false);
@@ -156,6 +164,15 @@ public class StartUI : MonoBehaviour
         else if (GameSettings.acquisitionType == AcquisitionType.DecodingFeedback)
         {
             SceneManager.LoadScene(decodingFeedbackSceneName);
+        }
+        else if (GameSettings.acquisitionType == AcquisitionType.BBT)
+        {
+            // BBT uses HandOpenClose grasping type internally
+            GameSettings.graspingType = GraspingType.HandOpenClose;
+            // numTrialsPerGrasp = number of blocks (e.g. 5 → 5 blocks, 5 open, 5 close)
+            // numTotalTrials = blocks × 2 (each block = 1 close + 1 open)
+            SessionControl.numTotalTrials = GameSettings.numTrialsPerGrasp * 2;
+            SceneManager.LoadScene(bbtSceneName);
         }
     }
 

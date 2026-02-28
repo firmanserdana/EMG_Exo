@@ -34,6 +34,9 @@ public class TcpServerManager : MonoBehaviour
 
     void Start()
     {
+        // Guard: if this instance was marked for destruction by Awake(), skip
+        if (Instance != this) return;
+
         // Load configs
         string configPath = Path.Combine(Application.dataPath, "Config");
 
