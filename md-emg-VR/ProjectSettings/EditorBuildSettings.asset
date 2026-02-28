@@ -20,4 +20,7 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/graspingFeedback.unity
     guid: 612afe5f93bec284f8c0e95e108d3b10
+  - enabled: 1
+    path: Assets/Scenes/graspingBBT.unity
+    guid: d5b73ee5aad016c4782eb6cb8fc141f3
   m_configObjects: {}

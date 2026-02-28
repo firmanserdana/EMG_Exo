@@ -1,0 +1,28 @@
+{
+    "sessionDuration": 60000,
+    "trialsStartDelay": 3000,
+    "graspCloseDuration": 1500,
+    "graspOpenDuration": 1500,
+    "holdDuration": 1000,
+    "moveDuration": 2000,
+    "placePauseDuration": 500,
+    "interTrialInterval": 1500,
+    "blockSize": 0.3,
+    "numberOfBlocks": 15,
+    "boxWidth": 6.0,
+    "boxDepth": 4.0,
+    "boxHeight": 0.4,
+    "partitionHeight": 2.0,
+    "blockSpawnAreaWidth": 2.5,
+    "blockSpawnAreaDepth": 3.0,
+    "handMoveHeight": 2.5,
+    "handMoveSpeed": 0.3,
+    "graspLabels": [
+        "HandClose",
+        "HandOpen"
+    ],
+    "graspIDs": [
+        1,
+        0
+    ]
+}
