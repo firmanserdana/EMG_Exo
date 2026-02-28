@@ -612,6 +612,10 @@ public class ManagerBBT : MonoBehaviour
         yield return new WaitForSeconds(config.trialsStartDelay / 1000f);
 
         // ---- Main loop: one block per iteration ----
+        // Each block produces 2 trials (CLOSE + OPEN), matching OpenLoop exactly:
+        //   Trial A: grasp_start(1) → hold_start → hold_end → released  (CLOSE)
+        //   [move block]
+        //   Trial B: grasp_start(0) → hold_start → hold_end → released  (OPEN)
         while (sessionRunning && currentBlockIndex < sourceBlocks.Count)
         {
             GameObject block = sourceBlocks[currentBlockIndex];
@@ -619,15 +623,26 @@ public class ManagerBBT : MonoBehaviour
 
             lblStatus.text = $"Block {currentBlockIndex + 1} / {sourceBlocks.Count}";
 
-            // ── EVENT: trial_start ──
+            // ===== TRIAL A: CLOSE HAND (grasp the block) =====
             RegisterEvent("trial_start");
-            Debug.Log($"[BBT] === Trial {currentBlockIndex + 1} ===");
+            Debug.Log($"[BBT] === Block {currentBlockIndex + 1} — Trial CLOSE ===");
 
-            // Run the trial animation (matches ManagerOpenLoop event sequence exactly)
-            yield return StartCoroutine(TrialAnimation(block));
+            yield return StartCoroutine(TrialClose(block));
 
-            // ── EVENT: trial_end ──
             RegisterEvent("trial_end");
+            Debug.Log("[BBT] trial_end (close)");
+
+            // ===== MOVE BLOCK (between trials — no events) =====
+            yield return StartCoroutine(MoveBlock(block));
+
+            // ===== TRIAL B: OPEN HAND (release the block) =====
+            RegisterEvent("trial_start");
+            Debug.Log($"[BBT] === Block {currentBlockIndex + 1} — Trial OPEN ===");
+
+            yield return StartCoroutine(TrialOpen(block));
+
+            RegisterEvent("trial_end");
+            Debug.Log("[BBT] trial_end (open)");
 
             // Scoring
             blocksMoved++;
@@ -656,12 +671,18 @@ public class ManagerBBT : MonoBehaviour
                 break;
             }
 
-            // ── PAUSE before next trial ──
+            // ── PAUSE before next block ──
             SetInstruction("Good!", Color.white);
             yield return new WaitForSeconds(config.interTrialInterval / 1000f);
+
+            // Return hand to source for next block
+            if (activeHand != null)
+            {
+                yield return StartCoroutine(MoveHandArc(targetHoverPos, sourceHoverPos));
+            }
         }
 
-        // ---- Check if ended by timer (not all blocks done) ----
+        // ---- Check if ended early ----
         if (currentBlockIndex < sourceBlocks.Count)
         {
             RegisterEvent("session_end");
@@ -684,31 +705,31 @@ public class ManagerBBT : MonoBehaviour
     }
 
     // ================================================================
-    //  TRIAL ANIMATION  (mirrors ManagerOpenLoop.TrialAnimation exactly)
+    //  TRIAL ANIMATIONS — each matches OpenLoop TrialAnimation exactly
+    //  OpenLoop pattern: grasp_start(ID) → animate → hold_start → hold → hold_end → release → released
     // ================================================================
 
     /// <summary>
-    /// Single block trial: close→move→open, with the EXACT same event sequence
-    /// as ManagerOpenLoop so EMG recording/labeling works identically.
+    /// CLOSE trial: pronate hand, show cue, grasp_start(1), close hand, hold, hold_end, released.
+    /// Matches OpenLoop event sequence exactly for a HandClose trial.
     /// </summary>
-    IEnumerator TrialAnimation(GameObject block)
+    IEnumerator TrialClose(GameObject block)
     {
-        // ── 1. PRONATE: hand faces palm-down toward the block ──
+        // Pronate hand (palm-down toward block)
         if (activeHand != null)
         {
             yield return StartCoroutine(PronateHand(true));
         }
 
-        // ── 2. Show instruction: CLOSE HAND ──
+        // Show instruction cue
         SetInstruction("CLOSE HAND", new Color(1f, 0.35f, 0.3f));
+        yield return new WaitForSeconds(0.5f);
 
-        yield return new WaitForSeconds(0.5f); // brief cue delay
-
-        // ── 3. EVENT: grasp_start(1) = HandClose ──
+        // EVENT: grasp_start(1) — identical to OpenLoop
         RegisterEvent("grasp_start", 1);
         Debug.Log("[BBT] grasp_start(1) — HandClose");
 
-        // Animate hand closing (grasping the block)
+        // Animate hand closing
         if (handController != null)
         {
             Coroutine co = handController.StartGrasp("HandClose");
@@ -720,17 +741,33 @@ public class ManagerBBT : MonoBehaviour
             yield return new WaitForSeconds(1.5f);
         }
 
-        // ── 4. EVENT: grasp_hold_start ──
+        // EVENT: grasp_hold_start — hold the grasp (EMG training window starts here)
         RegisterEvent("grasp_hold_start");
-        Debug.Log("[BBT] grasp_hold_start");
+        Debug.Log("[BBT] grasp_hold_start (close)");
 
-        // Hold briefly before moving
         yield return new WaitForSeconds(config.holdDuration / 1000f);
 
-        // ── 5. MOVE: hand + block arc from source to target (stay pronated) ──
+        // EVENT: grasp_hold_end — (EMG training window ends here)
+        SetInstruction("", Color.white);
+        RegisterEvent("grasp_hold_end");
+        Debug.Log("[BBT] grasp_hold_end (close)");
+
+        // Release animation (hand stays closed visually — we just mark event)
+        // In OpenLoop, ReleaseGrasp is called here. For BBT we skip the visual
+        // release because the hand needs to stay closed to carry the block.
+        // But we still fire grasp_released to complete the event cycle.
+        RegisterEvent("grasp_released");
+        Debug.Log("[BBT] grasp_released (close trial complete)");
+    }
+
+    /// <summary>
+    /// Move the block from source to target (no EMG events — just animation).
+    /// </summary>
+    IEnumerator MoveBlock(GameObject block)
+    {
         SetInstruction("MOVING BLOCK...", new Color(0.3f, 0.7f, 1f));
 
-        // Attach block to hand so it moves along
+        // Attach block to hand
         Transform originalParent = block.transform.parent;
         Vector3 blockOffset = Vector3.zero;
         if (activeHand != null)
@@ -740,7 +777,7 @@ public class ManagerBBT : MonoBehaviour
             block.transform.localPosition = blockOffset;
         }
 
-        // Move hand (already pronated) from source to target in an arc
+        // Arc movement from source to target
         if (activeHand != null)
         {
             yield return StartCoroutine(MoveHandArc(sourceHoverPos, targetHoverPos));
@@ -751,26 +788,31 @@ public class ManagerBBT : MonoBehaviour
             yield return StartCoroutine(AnimateBlockArc(block, block.transform.position, targetPos));
         }
 
-        // ── 6. EVENT: grasp_hold_end ──
-        RegisterEvent("grasp_hold_end");
-        Debug.Log("[BBT] grasp_hold_end");
-
-        // Detach block at target position
+        // Detach block at target
         if (activeHand != null)
         {
             block.transform.SetParent(originalParent);
             block.transform.position = GetNextDropPosition();
         }
 
-        // Hand stays pronated (palm-down) — no supination after placing
+        SetInstruction("", Color.white);
+    }
 
-        // ── 7. OPEN HAND ──
+    /// <summary>
+    /// OPEN trial: show cue, grasp_start(0), open hand, hold, hold_end, released.
+    /// Matches OpenLoop event sequence exactly for a HandOpen trial.
+    /// </summary>
+    IEnumerator TrialOpen(GameObject block)
+    {
+        // Show instruction cue
         SetInstruction("OPEN HAND", new Color(0.3f, 1f, 0.4f));
+        yield return new WaitForSeconds(0.5f);
 
-        // ── 8. EVENT: grasp_start(0) = HandOpen ──
+        // EVENT: grasp_start(0) — identical to OpenLoop
         RegisterEvent("grasp_start", 0);
         Debug.Log("[BBT] grasp_start(0) — HandOpen");
 
+        // Animate hand opening (release the block)
         if (handController != null)
         {
             Coroutine co = handController.ReleaseGrasp();
@@ -782,17 +824,20 @@ public class ManagerBBT : MonoBehaviour
             yield return new WaitForSeconds(1.5f);
         }
 
-        // ── 9. EVENT: grasp_released ──
-        RegisterEvent("grasp_released");
-        Debug.Log("[BBT] grasp_released");
+        // EVENT: grasp_hold_start — hold the open position (EMG training window)
+        RegisterEvent("grasp_hold_start");
+        Debug.Log("[BBT] grasp_hold_start (open)");
 
-        // ── 10. RETURN hand to source zone for next block ──
+        yield return new WaitForSeconds(config.holdDuration / 1000f);
+
+        // EVENT: grasp_hold_end
         SetInstruction("", Color.white);
+        RegisterEvent("grasp_hold_end");
+        Debug.Log("[BBT] grasp_hold_end (open)");
 
-        if (activeHand != null)
-        {
-            yield return StartCoroutine(MoveHandArc(targetHoverPos, sourceHoverPos));
-        }
+        // EVENT: grasp_released — cycle complete
+        RegisterEvent("grasp_released");
+        Debug.Log("[BBT] grasp_released (open trial complete)");
     }
 
     // ================================================================
