@@ -15,7 +15,7 @@ BOARD1_MAC="0C:B2:B7:07:98:11" # Sessantaquattro (Texas Instruments)
 BOARD1_IP="192.168.50.10"
 
 # ESP32 Glove Controller Configuration  
-BOARD2_MAC="68:FE:71:0C:22:54" # ESP32 (Espressif)
+BOARD2_MAC="68:FE:71:80:2F:BC" # ESP32 (Espressif)
 BOARD2_IP="192.168.50.11"
 # ==========================================
 
