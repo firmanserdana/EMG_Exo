@@ -1989,9 +1989,10 @@ class EMGAnalyzer:
                 spine.set_edgecolor(color_border)
                 spine.set_linewidth(4)
             
-            # Add mean amplitude annotation
+            # Add mean and median amplitude annotation
             mean_amp = rms_downsampled.mean()
-            ax.set_title(f'{condition}\nMean: {mean_amp:.1f} %MVC', 
+            median_amp = np.median(rms_downsampled)
+            ax.set_title(f'{condition}\nMean: {mean_amp:.1f} | Median: {median_amp:.1f} %MVC', 
                         fontsize=13, fontweight='bold')
             ax.set_xlabel('Time (s)', fontsize=11)
             ax.set_ylabel('Channel', fontsize=11)
@@ -2041,7 +2042,8 @@ class EMGAnalyzer:
             )
             
             mean_diff = diff_data.mean()
-            ax.set_title(f'Difference: {label}\nMean Δ: {mean_diff:+.1f} %MVC', 
+            median_diff = np.median(diff_data)
+            ax.set_title(f'Difference: {label}\nMean Δ: {mean_diff:+.1f} | Median Δ: {median_diff:+.1f} %MVC', 
                         fontsize=12, fontweight='bold')
             ax.set_xlabel('Time (s)', fontsize=11)
             ax.set_ylabel('Channel', fontsize=11)
@@ -2123,9 +2125,11 @@ class EMGAnalyzer:
                 cmap='magma'
             )
             
-            ax.set_title(f'{condition}\nMean: {condition_means[condition].mean():.1f} %MVC', 
+            mean_val = condition_means[condition].mean()
+            median_val = np.median(condition_means[condition])
+            ax.set_title(f'{condition}\nMean: {mean_val:.1f} | Median: {median_val:.1f} %MVC', 
                         fontsize=13, fontweight='bold')
-            plt.colorbar(sm, ax=ax, label='Mean RMS (%MVC)')
+            plt.colorbar(sm, ax=ax, label='RMS (%MVC)')
         
         # Row 2: Example from one subject
         for idx, condition in enumerate(CONDITIONS):
@@ -2142,7 +2146,9 @@ class EMGAnalyzer:
                 cmap='magma'
             )
             
-            ax.set_title(f'Example Subject\nMean: {condition_examples[condition].mean():.1f} %MVC', 
+            ex_mean = condition_examples[condition].mean()
+            ex_median = np.median(condition_examples[condition])
+            ax.set_title(f'Example Subject\nMean: {ex_mean:.1f} | Median: {ex_median:.1f} %MVC', 
                         fontsize=12, fontweight='bold')
             plt.colorbar(sm, ax=ax, label='RMS (%MVC)')
 
@@ -2265,7 +2271,8 @@ class EMGAnalyzer:
                     )
                     
                     mean_val = subject_data[condition].mean()
-                    ax.set_title(f'{condition}\nMean: {mean_val:.1f} %MVC', 
+                    median_val = np.median(subject_data[condition])
+                    ax.set_title(f'{condition}\nMean: {mean_val:.1f} | Median: {median_val:.1f} %MVC', 
                                 fontsize=13, fontweight='bold')
                     cbar = plt.colorbar(sm, ax=ax, label='%MVC')
                 
@@ -2512,7 +2519,7 @@ class EMGAnalyzer:
         if len(df) > 0:
             # Create summary statistics
             summary = df.groupby(['Condition', 'Object'])['Duration (s)'].agg([
-                'count', 'mean', 'std', 'min', 'max'
+                'count', 'mean', 'median', 'std', 'min', 'max'
             ]).reset_index()
             
             print("\n=== Time Consumption Analysis ===")
@@ -2535,6 +2542,7 @@ class EMGAnalyzer:
             
             # Create visualization
             self._plot_time_consumption(df)
+            self._plot_duration_by_object(duration_subject_df)
         
         return df
     
@@ -2551,6 +2559,16 @@ class EMGAnalyzer:
         ax.set_ylabel('Duration (seconds)', fontsize=12)
         ax.set_xlabel('Condition', fontsize=12)
         ax.grid(True, alpha=0.3, axis='y')
+        # Add mean and median annotations
+        conditions_in_plot = df_plot['Condition'].unique()
+        for i, cond in enumerate(conditions_in_plot):
+            cond_data = df_plot[df_plot['Condition'] == cond]['Duration (s)']
+            if len(cond_data) > 0:
+                mu = cond_data.mean()
+                med = cond_data.median()
+                ax.text(i, ax.get_ylim()[1] * 0.92, f'μ={mu:.1f}\nmed={med:.1f}',
+                        ha='center', fontsize=9, fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
         
         # Violin plot by object
         ax = axes[1]
@@ -2566,6 +2584,88 @@ class EMGAnalyzer:
         
         save_path = self.results_dir / 'time_consumption_comparison.svg'
         plt.savefig(save_path, bbox_inches='tight', format='svg')
+        print(f"Saved: {save_path}")
+        plt.close()
+
+    def _plot_duration_by_object(self, df: pd.DataFrame):
+        """Plot duration box plot by object and condition (analogous to _plot_mvc_by_object)."""
+        condition_order = CONDITIONS
+        colors = {
+            'No glove': '#1f77b4',
+            'Passive glove': '#ff7f0e',
+            'Active glove': '#2ca02c'
+        }
+
+        fig, axes = plt.subplots(1, 2, figsize=(18, 7))
+
+        # Left: box plot by object and condition
+        ax = axes[0]
+        df_plot = df.copy()
+        df_plot['Condition'] = pd.Categorical(df_plot['Condition'], categories=condition_order, ordered=True)
+        objects_sorted = sorted(df['Object'].unique())
+
+        sns.boxplot(data=df_plot, x='Object', y='Duration (s)', hue='Condition',
+                    order=objects_sorted, hue_order=condition_order,
+                    palette=colors, ax=ax)
+
+        n_conditions = len(condition_order)
+        width = 0.8 / n_conditions
+        for i, obj in enumerate(objects_sorted):
+            for j, cond in enumerate(condition_order):
+                data = df_plot[(df_plot['Object'] == obj) & (df_plot['Condition'] == cond)]['Duration (s)']
+                if len(data) > 0:
+                    mean_val = data.mean()
+                    median_val = data.median()
+                    x_pos = i + (j - (n_conditions - 1) / 2) * width
+                    ax.scatter(x_pos, mean_val, marker='*', s=150, color='white',
+                               edgecolor='black', linewidth=1.5, zorder=10)
+                    ax.scatter(x_pos, median_val, marker='D', s=60, color='red',
+                               edgecolor='darkred', linewidth=1, zorder=10)
+
+        ax.set_xlabel('Object', fontsize=13, fontweight='bold')
+        ax.set_ylabel('Duration (s)', fontsize=13, fontweight='bold')
+        ax.set_title('Duration by Object and Condition (Box Plot)\n(★ = Mean, ◆ = Median)', fontsize=15, fontweight='bold')
+        ax.legend(fontsize=11, loc='upper right', title='Condition')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(bottom=0)
+
+        # Right: overall comparison by condition
+        ax = axes[1]
+        df_overall = df.copy()
+        df_overall['Condition'] = pd.Categorical(df_overall['Condition'], categories=condition_order, ordered=True)
+        df_overall = df_overall.sort_values('Condition')
+
+        sns.boxplot(data=df_overall, x='Condition', y='Duration (s)',
+                    order=condition_order, palette=colors, ax=ax)
+
+        for i, cond in enumerate(condition_order):
+            cond_data = df_overall[df_overall['Condition'] == cond]['Duration (s)']
+            if len(cond_data) > 0:
+                mean_val = cond_data.mean()
+                median_val = cond_data.median()
+                ax.scatter(i, mean_val, marker='*', s=150, color='white',
+                           edgecolor='black', linewidth=1.5, zorder=10)
+                ax.scatter(i, median_val, marker='D', s=60, color='red',
+                           edgecolor='darkred', linewidth=1, zorder=10)
+
+        ax.set_title('Overall Duration by Condition', fontsize=15, fontweight='bold')
+        ax.set_ylabel('Duration (s)', fontsize=13, fontweight='bold')
+        ax.set_xlabel('Condition', fontsize=13, fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(bottom=0)
+
+        for i, cond in enumerate(condition_order):
+            cond_data = df_overall[df_overall['Condition'] == cond]['Duration (s)']
+            if len(cond_data) > 0:
+                mean_val = cond_data.mean()
+                median_val = cond_data.median()
+                ax.text(i, mean_val + 0.2, f'μ={mean_val:.1f}\nmed={median_val:.1f}', ha='center',
+                        fontsize=10, fontweight='bold')
+
+        plt.tight_layout()
+
+        save_path = self.results_dir / 'duration_by_object_comparison.svg'
+        plt.savefig(save_path, bbox_inches='tight', format='svg', dpi=150)
         print(f"Saved: {save_path}")
         plt.close()
 
@@ -2634,6 +2734,15 @@ class EMGAnalyzer:
         ax.set_ylabel('Duration (seconds)', fontsize=12)
         ax.set_xlabel('Condition', fontsize=12)
         ax.grid(True, alpha=0.3, axis='y')
+        # Add mean and median annotations for duration
+        for i, cond in enumerate(condition_order):
+            cond_data = dur_plot[dur_plot['Condition'] == cond]['Duration (s)']
+            if len(cond_data) > 0:
+                mu = cond_data.mean()
+                med = cond_data.median()
+                ax.text(i, ax.get_ylim()[1] * 0.92, f'μ={mu:.1f}\nmed={med:.1f}',
+                        ha='center', fontsize=9, fontweight='bold',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.85))
 
         # Panel 2: Duration violin by object/condition (subject means)
         ax = axes[1]
@@ -2651,22 +2760,30 @@ class EMGAnalyzer:
         mvc_plot = mvc_df.copy()
         mvc_plot['Condition'] = pd.Categorical(mvc_plot['Condition'], categories=condition_order, ordered=True)
 
-        summary = mvc_plot.groupby(['Object', 'Condition'])['%MVC'].agg(['mean', 'std']).reset_index()
+        summary = mvc_plot.groupby(['Object', 'Condition'])['%MVC'].agg(['mean', 'median', 'std']).reset_index()
         objects = sorted(mvc_plot['Object'].unique())
         x = np.arange(len(objects))
         width = 0.25
         for i, condition in enumerate(condition_order):
             cond_data = summary[summary['Condition'] == condition]
             means = []
+            medians = []
             stds = []
             for obj in objects:
                 row = cond_data[cond_data['Object'] == obj]
                 means.append(row['mean'].values[0] if len(row) else 0)
+                medians.append(row['median'].values[0] if len(row) else 0)
                 stds.append(row['std'].values[0] if len(row) else 0)
             offset = (i - 1) * width
-            ax.bar(x + offset, means, width, yerr=stds, label=condition,
+            bars = ax.bar(x + offset, means, width, yerr=stds, label=condition,
                    color=CONDITION_COLORS.get(condition, '#333'), capsize=3,
                    alpha=0.85, edgecolor='black', linewidth=0.5)
+            # Add median markers as horizontal lines on each bar
+            for j, (bar, med_val) in enumerate(zip(bars, medians)):
+                bar_x = bar.get_x()
+                bar_w = bar.get_width()
+                ax.hlines(med_val, bar_x + 0.05 * bar_w, bar_x + 0.95 * bar_w,
+                          colors='red', linewidth=2, zorder=5)
 
         ax.set_xlabel('Object', fontsize=12)
         ax.set_ylabel('%MVC (subject mean)', fontsize=12)
@@ -2728,7 +2845,7 @@ class EMGAnalyzer:
         if len(df) > 0:
             # Create summary statistics
             summary = df.groupby(['Condition', 'Object'])['%MVC'].agg([
-                'count', 'mean', 'std', 'min', 'max'
+                'count', 'mean', 'median', 'std', 'min', 'max'
             ]).reset_index()
             
             print("\n=== %MVC Analysis by Object ===")
@@ -2780,7 +2897,7 @@ class EMGAnalyzer:
                    hue_order=condition_order,
                    palette=colors, ax=ax)
         
-        # Add star markers for mean values
+        # Add star markers for mean values and diamond markers for median
         n_conditions = len(condition_order)
         width = 0.8 / n_conditions  # Width of each box
         for i, obj in enumerate(objects_sorted):
@@ -2788,14 +2905,17 @@ class EMGAnalyzer:
                 data = df_plot[(df_plot['Object'] == obj) & (df_plot['Condition'] == cond)]['%MVC']
                 if len(data) > 0:
                     mean_val = data.mean()
+                    median_val = data.median()
                     # Calculate x position: center of object group + offset for each condition
                     x_pos = i + (j - (n_conditions - 1) / 2) * width
                     ax.scatter(x_pos, mean_val, marker='*', s=150, color='white', 
                               edgecolor='black', linewidth=1.5, zorder=10)
+                    ax.scatter(x_pos, median_val, marker='D', s=60, color='red',
+                              edgecolor='darkred', linewidth=1, zorder=10)
         
         ax.set_xlabel('Object', fontsize=13, fontweight='bold')
         ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
-        ax.set_title('%MVC by Object and Condition (Box Plot)', fontsize=15, fontweight='bold')
+        ax.set_title('%MVC by Object and Condition (Box Plot)\n(★ = Mean, ◆ = Median)', fontsize=15, fontweight='bold')
         ax.legend(fontsize=11, loc='upper right', title='Condition')
         ax.grid(True, alpha=0.3, axis='y')
         ax.set_ylim(bottom=0)
@@ -2809,13 +2929,16 @@ class EMGAnalyzer:
         sns.boxplot(data=df_plot, x='Condition', y='%MVC', 
                    order=condition_order, palette=colors, ax=ax)
         
-        # Add star markers for mean values
+        # Add star markers for mean values and diamond for median
         for i, cond in enumerate(condition_order):
             cond_data = df_plot[df_plot['Condition'] == cond]['%MVC']
             if len(cond_data) > 0:
                 mean_val = cond_data.mean()
+                median_val = cond_data.median()
                 ax.scatter(i, mean_val, marker='*', s=150, color='white', 
                           edgecolor='black', linewidth=1.5, zorder=10)
+                ax.scatter(i, median_val, marker='D', s=60, color='red',
+                          edgecolor='darkred', linewidth=1, zorder=10)
         
         ax.set_title('Overall %MVC by Condition', fontsize=15, fontweight='bold')
         ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
@@ -2823,12 +2946,13 @@ class EMGAnalyzer:
         ax.grid(True, alpha=0.3, axis='y')
         ax.set_ylim(bottom=0)
         
-        # Add mean values as text
+        # Add mean and median values as text
         for i, cond in enumerate(condition_order):
             cond_data = df_plot[df_plot['Condition'] == cond]['%MVC']
             if len(cond_data) > 0:
                 mean_val = cond_data.mean()
-                ax.text(i, mean_val + 1, f'μ={mean_val:.1f}', ha='center', 
+                median_val = cond_data.median()
+                ax.text(i, mean_val + 1, f'μ={mean_val:.1f}\nmed={median_val:.1f}', ha='center', 
                        fontsize=10, fontweight='bold')
         
         plt.tight_layout()

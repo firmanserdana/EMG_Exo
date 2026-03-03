@@ -92,13 +92,19 @@ def test_hypothesis_comprehensive(active_values, other_values, other_name):
     cohens = cohens_d(active_values, other_values)
     effect_interpretation = interpret_cohens_d(cohens)
     
-    # 5. Descriptive statistics
+    # 5. Descriptive statistics (mean as primary, median alongside)
     mean_active = np.mean(active_values)
     mean_other = np.mean(other_values)
     mean_diff = mean_active - mean_other
     percent_diff = ((mean_active - mean_other) / mean_other) * 100 if mean_other != 0 else 0
     
-    # 6. Hypothesis support (parametric, non-parametric, paired)
+    # Also compute median for reporting alongside
+    median_active = np.median(active_values)
+    median_other = np.median(other_values)
+    median_diff = median_active - median_other
+    median_percent_diff = ((median_active - median_other) / median_other) * 100 if median_other != 0 else 0
+    
+    # 6. Hypothesis support (use mean for direction)
     hypothesis_supported_welch = (mean_active < mean_other) and (p_welch < 0.05)
     hypothesis_supported_mw = (mean_active < mean_other) and (p_mw_one < 0.05)
     hypothesis_supported_wilcoxon = (mean_active < mean_other) and (p_wilcoxon < 0.05)
@@ -113,18 +119,22 @@ def test_hypothesis_comprehensive(active_values, other_values, other_name):
         'cohens_d': cohens,
         'effect_size': effect_interpretation,
         'mean_diff': mean_diff,
+        'median_diff': median_diff,
         'percent_diff': percent_diff,
+        'median_percent_diff': median_percent_diff,
         'hypothesis_supported_welch': hypothesis_supported_welch,
         'hypothesis_supported_mw': hypothesis_supported_mw,
         'hypothesis_supported_wilcoxon': hypothesis_supported_wilcoxon,
         'mean_active': mean_active,
-        'mean_other': mean_other
+        'mean_other': mean_other,
+        'median_active': median_active,
+        'median_other': median_other
     }
 
 def test_hypothesis_active_lower(active_values, other_values, other_name):
     """
     Test if Active < Other using one-tailed t-test (backward compatibility)
-    Returns: (t_stat, p_value, mean_diff, percent_diff, hypothesis_supported)
+    Returns: (t_stat, p_value, median_diff, percent_diff, hypothesis_supported)
     """
     results = test_hypothesis_comprehensive(active_values, other_values, other_name)
     return (results['t_stat'], results['p_welch'], results['mean_diff'], 
@@ -160,11 +170,17 @@ def test_pairwise_comparison(group1_values, group2_values, group1_name, group2_n
     cohens = cohens_d(group1_values, group2_values)
     effect_interpretation = interpret_cohens_d(cohens)
     
-    # 5. Descriptive statistics
+    # 5. Descriptive statistics (mean as primary, median alongside)
     mean_group1 = np.mean(group1_values)
     mean_group2 = np.mean(group2_values)
     mean_diff = mean_group1 - mean_group2
     percent_diff = ((mean_group1 - mean_group2) / mean_group2) * 100 if mean_group2 != 0 else 0
+    
+    # Also compute median for reporting alongside
+    median_group1 = np.median(group1_values)
+    median_group2 = np.median(group2_values)
+    median_diff = median_group1 - median_group2
+    median_percent_diff = ((median_group1 - median_group2) / median_group2) * 100 if median_group2 != 0 else 0
     
     # 6. Significance (two-tailed)
     is_significant_welch = p_welch < 0.05
@@ -181,12 +197,16 @@ def test_pairwise_comparison(group1_values, group2_values, group1_name, group2_n
         'cohens_d': cohens,
         'effect_size': effect_interpretation,
         'mean_diff': mean_diff,
+        'median_diff': median_diff,
         'percent_diff': percent_diff,
+        'median_percent_diff': median_percent_diff,
         'is_significant_welch': is_significant_welch,
         'is_significant_mw': is_significant_mw,
         'is_significant_wilcoxon': is_significant_wilcoxon,
         'mean_group1': mean_group1,
         'mean_group2': mean_group2,
+        'median_group1': median_group1,
+        'median_group2': median_group2,
         'group1_name': group1_name,
         'group2_name': group2_name
     }
@@ -204,6 +224,7 @@ def collect_subject_level_metric(data_dict, analyzer, object_ids, metric):
     Returns (subject_means, rows_df) where subject_means[condition][obj][subject] = mean_value.
     """
     subject_means = defaultdict(lambda: defaultdict(dict))
+    subject_medians = defaultdict(lambda: defaultdict(dict))
     rows = []
 
     for condition in CONDITIONS:
@@ -238,15 +259,18 @@ def collect_subject_level_metric(data_dict, analyzer, object_ids, metric):
 
             for subject, values in per_subject.items():
                 mean_val = float(np.mean(values))
+                median_val = float(np.median(values))
                 subject_means[condition][obj_id][subject] = mean_val
+                subject_medians[condition][obj_id][subject] = median_val
                 rows.append({
                     'Condition': condition,
                     'Object': obj_id,
                     'Subject': subject,
-                    'Value': mean_val
+                    'Value': mean_val,
+                    'Value_median': median_val
                 })
 
-    return subject_means, pd.DataFrame(rows)
+    return subject_means, subject_medians, pd.DataFrame(rows)
 
 
 def build_paired_lists(active_map, other_map):
@@ -255,6 +279,76 @@ def build_paired_lists(active_map, other_map):
     active_vals = [active_map[s] for s in shared]
     other_vals = [other_map[s] for s in shared]
     return active_vals, other_vals, shared
+
+
+def write_median_aggregated_tests(f, condition_subject_medians, comparison_pairs, CONDITIONS, one_tailed=True, direction='less'):
+    """Write a section showing statistical tests run on subject-level MEDIANS.
+    
+    This complements the main tests (run on subject-level means) by also running
+    the same tests on subject-level medians, giving two perspectives.
+    
+    Args:
+        f: file handle for writing
+        condition_subject_medians: dict of {condition: {subject: median_value}} or
+                                  {condition: {obj_id: {subject: median_value}}}
+        comparison_pairs: list of (cond1, cond2) tuples
+        CONDITIONS: list of condition names
+        one_tailed: if True, write one-tailed hypothesis section
+        direction: 'less' for Active < Other, 'greater' for Active > Other
+    """
+    f.write("### Statistical Tests on Subject-Level Medians\n\n")
+    f.write("*Same tests as above, but each subject's value is their **median** across sessions (instead of mean).*\n\n")
+    
+    if one_tailed and 'Active glove' in condition_subject_medians:
+        active_median_map = condition_subject_medians['Active glove']
+
+        if direction == 'less':
+            hyp_text = "Active glove < Other"
+        else:
+            hyp_text = "Active glove > Other"
+
+        f.write(f"#### Hypothesis: {hyp_text} (subject-paired, median-aggregated)\n\n")
+        f.write("| Comparison | Subjects | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | Supported? (Wilcoxon) |\n")
+        f.write("|------------|----------|--------|-----------|---|--------|---|--------------|------------------------|\n")
+
+        for other_cond in ['Passive glove', 'No glove']:
+            if other_cond not in condition_subject_medians:
+                f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                continue
+            active_vals, other_vals, shared = build_paired_lists(active_median_map, condition_subject_medians[other_cond])
+            if not shared:
+                f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                continue
+
+            if direction == 'less':
+                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+            else:
+                # Swap args: test_hypothesis_comprehensive tests arg1 < arg2
+                # So passing (other, active) tests other < active ≡ active > other
+                results = test_hypothesis_comprehensive(other_vals, active_vals, other_cond)
+
+            support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+            f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
+                    f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
+                    f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+        f.write("\n")
+
+    # Pairwise two-tailed
+    f.write("#### Pairwise Comparisons (two-tailed, median-aggregated)\n\n")
+    f.write("| Comparison | Subjects | t-stat | p (Welch) | W | p (Wilcoxon) | Mean Diff | Median Diff | Significant? (Wilcoxon) |\n")
+    f.write("|------------|----------|--------|-----------|---|--------------|-----------|-------------|-------------------------|\n")
+    for cond1, cond2 in comparison_pairs:
+        if cond1 in condition_subject_medians and cond2 in condition_subject_medians:
+            vals1, vals2, shared = build_paired_lists(condition_subject_medians[cond1], condition_subject_medians[cond2])
+            if not shared:
+                continue
+            results = test_pairwise_comparison(vals1, vals2, cond1, cond2)
+            sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
+            f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
+                   f"{format_pvalue(results['p_welch'])} | "
+                   f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | "
+                   f"{results['mean_diff']:.3f} | {results['median_diff']:.3f} | **{sig_text}** |\n")
+    f.write("\n")
 
 
 def generate_amplitude_statistics():
@@ -294,6 +388,7 @@ def generate_amplitude_statistics():
             f.write(f"## Object {obj_id}\n\n")
 
             condition_subject_means = {}
+            condition_subject_medians = {}
 
             for condition in CONDITIONS:
                 if condition not in data_dict or obj_id not in data_dict[condition]:
@@ -324,7 +419,9 @@ def generate_amplitude_statistics():
                     })
 
                 subj_mean_map = {subj: float(np.mean(vals)) for subj, vals in per_subject.items()}
+                subj_median_map = {subj: float(np.median(vals)) for subj, vals in per_subject.items()}
                 condition_subject_means[condition] = subj_mean_map
+                condition_subject_medians[condition] = subj_median_map
 
                 for subject, mean_val in subj_mean_map.items():
                     subject_rows.append({
@@ -340,13 +437,13 @@ def generate_amplitude_statistics():
 
             # Summary statistics (subject means)
             f.write("### Summary Statistics (subject means)\n\n")
-            f.write("| Condition | Subjects | Mean (90th %ile) | Std | Min | Max |\n")
-            f.write("|-----------|----------|------------------|-----|-----|-----|\n")
+            f.write("| Condition | Subjects | Mean (90th %ile) | Median (90th %ile) | Std | Min | Max |\n")
+            f.write("|-----------|----------|--------------------|--------------------|-----|-----|-----|\n")
             for condition in CONDITIONS:
                 subj_map = condition_subject_means.get(condition, {})
                 vals = list(subj_map.values())
                 if vals:
-                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.2f} | "
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.2f} | {np.median(vals):.2f} | "
                            f"{np.std(vals):.2f} | {np.min(vals):.2f} | {np.max(vals):.2f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - | - | - |\n")
@@ -412,8 +509,8 @@ def generate_amplitude_statistics():
             pairwise_results = {}
 
             f.write("#### Parametric Test: Welch's t-test (two-tailed)\n\n")
-            f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
-            f.write("|------------|-------------------|--------|---------|-----------|----------|--------------|\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | Median Diff | % Change | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|-----------|-------------|----------|--------------|\n")
 
             for cond1, cond2 in comparison_pairs:
                 if cond1 in condition_subject_means and cond2 in condition_subject_means:
@@ -426,7 +523,7 @@ def generate_amplitude_statistics():
                     sig_text = "✓ YES" if results['is_significant_welch'] else "✗ NO"
                     f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
                            f"{format_pvalue(results['p_welch'])} | "
-                           f"{results['mean_diff']:.2f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
+                           f"{results['mean_diff']:.2f} | {results['median_diff']:.2f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
 
             f.write("\n")
 
@@ -467,7 +564,12 @@ def generate_amplitude_statistics():
                     f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['cohens_d']:.3f} | "
                            f"{results['effect_size']} | {direction} |\n")
 
-            f.write("\n---\n\n")
+            f.write("\n")
+
+            # === Tests on subject-level medians ===
+            write_median_aggregated_tests(f, condition_subject_medians, comparison_pairs, CONDITIONS, one_tailed=True)
+
+            f.write("---\n\n")
     
     # Export amplitude values to CSV
     import pandas as pd
@@ -526,6 +628,7 @@ def generate_activation_statistics():
             f.write(f"## Object {obj_id}\n\n")
 
             condition_rate_means = {}
+            condition_rate_medians = {}
             condition_duration_means = {}
 
             for condition in CONDITIONS:
@@ -562,9 +665,11 @@ def generate_activation_statistics():
                     })
 
                 rate_map = {subj: float(np.mean(vals)) for subj, vals in per_subject_rates.items()}
+                rate_median_map = {subj: float(np.median(vals)) for subj, vals in per_subject_rates.items()}
                 dur_map = {subj: float(np.mean(vals)) for subj, vals in per_subject_durations.items()}
 
                 condition_rate_means[condition] = rate_map
+                condition_rate_medians[condition] = rate_median_map
                 condition_duration_means[condition] = dur_map
 
                 for subject, mean_rate in rate_map.items():
@@ -581,13 +686,13 @@ def generate_activation_statistics():
                 continue
 
             f.write("### Summary Statistics: Rate (subject means)\n\n")
-            f.write("| Condition | Subjects | Mean Rate | Std | Mean Duration (s) |\n")
-            f.write("|-----------|----------|-----------|-----|-------------------|\n")
+            f.write("| Condition | Subjects | Mean Rate | Median Rate | Std | Mean Duration (s) |\n")
+            f.write("|-----------|----------|-----------|-------------|-----|-------------------|\n")
             for condition in CONDITIONS:
                 rates = list(condition_rate_means.get(condition, {}).values())
                 durs = list(condition_duration_means.get(condition, {}).values())
                 if rates:
-                    f.write(f"| {condition} | {len(rates)} | {np.mean(rates):.2f} | "
+                    f.write(f"| {condition} | {len(rates)} | {np.mean(rates):.2f} | {np.median(rates):.2f} | "
                            f"{np.std(rates):.2f} | {np.mean(durs) if durs else np.nan:.2f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - | - |\n")
@@ -651,8 +756,8 @@ def generate_activation_statistics():
             pairwise_rate_results = {}
 
             f.write("#### Parametric Test: Welch's t-test (two-tailed)\n\n")
-            f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
-            f.write("|------------|-------------------|--------|---------|-----------|----------|--------------|\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | Median Diff | % Change | Significant? |\n")
+            f.write("|------------|-------------------|--------|---------|-----------|-------------|----------|--------------|\n")
 
             for cond1, cond2 in comparison_pairs:
                 if cond1 in condition_rate_means and cond2 in condition_rate_means:
@@ -665,7 +770,7 @@ def generate_activation_statistics():
                     sig_text = "✓ YES" if results['is_significant_welch'] else "✗ NO"
                     f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
                            f"{format_pvalue(results['p_welch'])} | "
-                           f"{results['mean_diff']:.2f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
+                           f"{results['mean_diff']:.2f} | {results['median_diff']:.2f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
 
             f.write("\n")
 
@@ -709,26 +814,37 @@ def generate_activation_statistics():
             f.write("\n")
 
             f.write("### Task Duration Comparison (subject-paired)\n\n")
-            f.write("| Comparison | Subjects (paired) | Mean Diff (s) | t-statistic (paired) | p-value |\n")
-            f.write("|------------|-------------------|---------------|----------------------|---------|\n")
+            f.write("| Comparison | Subjects (paired) | Mean Diff (s) | Median Diff (s) | t-statistic (paired) | p-value |\n")
+            f.write("|------------|-------------------|---------------|-----------------|----------------------|---------|\n")
 
             active_dur_map = condition_duration_means.get('Active glove', {})
             for other_cond in ['Passive glove', 'No glove']:
                 if other_cond not in condition_duration_means:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - |\n")
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - |\n")
                     continue
 
                 other_dur_map = condition_duration_means[other_cond]
                 active_durs, other_durs, shared = build_paired_lists(active_dur_map, other_dur_map)
                 if not shared:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - |\n")
+                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - |\n")
                     continue
 
                 t_stat, p_val = stats.ttest_rel(active_durs, other_durs)
                 mean_diff = np.mean(active_durs) - np.mean(other_durs)
-                f.write(f"| Active vs {other_cond} | {len(shared)} | {mean_diff:+.2f} | {t_stat:.3f} | {format_pvalue(p_val)} |\n")
+                median_diff = np.median(active_durs) - np.median(other_durs)
+                f.write(f"| Active vs {other_cond} | {len(shared)} | {mean_diff:+.2f} | {median_diff:+.2f} | {t_stat:.3f} | {format_pvalue(p_val)} |\n")
 
-            f.write("\n---\n\n")
+            f.write("\n")
+
+            # --- Median-aggregated tests for activation rate ---
+            comparison_pairs = [
+                ('Active glove', 'No glove'),
+                ('Passive glove', 'No glove'),
+                ('Active glove', 'Passive glove')
+            ]
+            write_median_aggregated_tests(f, condition_rate_medians, comparison_pairs, CONDITIONS, one_tailed=True)
+
+            f.write("---\n\n")
     
     # Export rate values to CSV
     import pandas as pd
@@ -764,7 +880,7 @@ def generate_duration_statistics():
     analyzer = EMGAnalyzer(EMGDataLoader(data_dir), fs_hz=inferred_fs, mvc_dict=mvc_dict)
     object_ids = list(range(6))
 
-    subject_means, df_subject = collect_subject_level_metric(data_dict, analyzer, object_ids, metric='duration')
+    subject_means, subject_medians, df_subject = collect_subject_level_metric(data_dict, analyzer, object_ids, metric='duration')
     df_subject = df_subject.rename(columns={'Value': 'Duration (s)'})
 
     # Save subject-level means
@@ -794,12 +910,12 @@ def generate_duration_statistics():
 
             # Summary stats
             f.write("### Summary Statistics (subject means)\n\n")
-            f.write("| Condition | Subjects | Mean (s) | Std (s) |\n")
-            f.write("|-----------|----------|---------|---------|\n")
+            f.write("| Condition | Subjects | Mean (s) | Median (s) | Std (s) |\n")
+            f.write("|-----------|----------|----------|-----------|---------|\n")
             for condition in CONDITIONS:
                 vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
                 if vals:
-                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.median(vals):.3f} | {np.std(vals):.3f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
@@ -896,8 +1012,8 @@ def generate_duration_statistics():
             
             # Effect sizes
             f.write("### Effect Size (Cohen's d)\n\n")
-            f.write("| Comparison | Cohen's d | Interpretation | Mean Diff (s) | % Change |\n")
-            f.write("|------------|-----------|----------------|---------------|----------|\n")
+            f.write("| Comparison | Cohen's d | Interpretation | Mean Diff (s) | Median Diff (s) | % Change |\n")
+            f.write("|------------|-----------|----------------|---------------|-----------------|----------|\n")
             
             for other_cond in ['Passive glove', 'No glove']:
                 if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
@@ -909,10 +1025,26 @@ def generate_duration_statistics():
                 d = cohens_d(active_vals, other_vals)
                 interp = interpret_cohens_d(d)
                 mean_diff = np.mean(active_vals) - np.mean(other_vals)
-                pct_change = (mean_diff / np.mean(other_vals)) * 100 if np.mean(other_vals) != 0 else 0
-                f.write(f"| Active vs {other_cond} | {d:.3f} | {interp} | {mean_diff:+.3f} | {pct_change:+.1f}% |\n")
+                median_diff = np.median(active_vals) - np.median(other_vals)
+                median_other = np.median(other_vals)
+                pct_change = (median_diff / median_other) * 100 if median_other != 0 else 0
+                f.write(f"| Active vs {other_cond} | {d:.3f} | {interp} | {mean_diff:+.3f} | {median_diff:+.3f} | {pct_change:+.1f}% |\n")
             
-            f.write("\n---\n\n")
+            f.write("\n")
+
+            # --- Median-aggregated tests for duration ---
+            comparison_pairs = [
+                ('Active glove', 'No glove'),
+                ('Passive glove', 'No glove'),
+                ('Active glove', 'Passive glove')
+            ]
+            dur_median_maps = {}
+            for condition in CONDITIONS:
+                if condition in subject_medians and obj_id in subject_medians[condition]:
+                    dur_median_maps[condition] = subject_medians[condition][obj_id]
+            write_median_aggregated_tests(f, dur_median_maps, comparison_pairs, CONDITIONS, one_tailed=True, direction='greater')
+
+            f.write("---\n\n")
 
     print(f"✓ Saved duration statistics: {report_path}")
     return report_path
@@ -935,7 +1067,7 @@ def generate_mvc_statistics():
     analyzer = EMGAnalyzer(EMGDataLoader(data_dir), fs_hz=inferred_fs, mvc_dict=mvc_dict)
     object_ids = list(range(6))
 
-    subject_means, df_subject = collect_subject_level_metric(data_dict, analyzer, object_ids, metric='mvc')
+    subject_means, subject_medians, df_subject = collect_subject_level_metric(data_dict, analyzer, object_ids, metric='mvc')
     df_subject = df_subject.rename(columns={'Value': '%MVC'})
 
     mvc_csv = results_dir / 'mvc_subject_means.csv'
@@ -957,12 +1089,12 @@ def generate_mvc_statistics():
             f.write(f"## Object {obj_id}\n\n")
 
             f.write("### Summary Statistics (subject means)\n\n")
-            f.write("| Condition | Subjects | Mean %MVC | Std %MVC |\n")
-            f.write("|-----------|----------|-----------|----------|\n")
+            f.write("| Condition | Subjects | Mean %MVC | Median %MVC | Std %MVC |\n")
+            f.write("|-----------|----------|-----------|-------------|----------|\n")
             for condition in CONDITIONS:
                 vals = list(subject_means.get(condition, {}).get(obj_id, {}).values())
                 if vals:
-                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.median(vals):.3f} | {np.std(vals):.3f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
@@ -1009,7 +1141,21 @@ def generate_mvc_statistics():
                         f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
                         f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
 
-            f.write("\n---\n\n")
+            f.write("\n")
+
+            # --- Median-aggregated tests for %MVC ---
+            comparison_pairs = [
+                ('Active glove', 'No glove'),
+                ('Passive glove', 'No glove'),
+                ('Active glove', 'Passive glove')
+            ]
+            mvc_median_maps = {}
+            for condition in CONDITIONS:
+                if condition in subject_medians and obj_id in subject_medians[condition]:
+                    mvc_median_maps[condition] = subject_medians[condition][obj_id]
+            write_median_aggregated_tests(f, mvc_median_maps, comparison_pairs, CONDITIONS, one_tailed=True, direction='less')
+
+            f.write("---\n\n")
 
     print(f"✓ Saved MVC statistics: {report_path}")
     return report_path
@@ -1099,6 +1245,9 @@ def generate_pca_statistics():
             pc1_maps = {}
             pc2_maps = {}
             mag_maps = {}
+            pc1_median_maps = {}
+            pc2_median_maps = {}
+            mag_median_maps = {}
 
             for condition in CONDITIONS:
                 if condition in condition_features:
@@ -1131,6 +1280,9 @@ def generate_pca_statistics():
                     pc1_maps[condition] = {subj: float(np.mean(vals['pc1'])) for subj, vals in per_subject.items()}
                     pc2_maps[condition] = {subj: float(np.mean(vals['pc2'])) for subj, vals in per_subject.items()}
                     mag_maps[condition] = {subj: float(np.mean(vals['mag'])) for subj, vals in per_subject.items()}
+                    pc1_median_maps[condition] = {subj: float(np.median(vals['pc1'])) for subj, vals in per_subject.items()}
+                    pc2_median_maps[condition] = {subj: float(np.median(vals['pc2'])) for subj, vals in per_subject.items()}
+                    mag_median_maps[condition] = {subj: float(np.median(vals['mag'])) for subj, vals in per_subject.items()}
 
                     for subject in per_subject:
                         subject_rows.append({
@@ -1144,12 +1296,12 @@ def generate_pca_statistics():
 
             # Summary statistics for PC1 (subject means)
             f.write("### PC1 Values (subject means, absolute)\n\n")
-            f.write("| Condition | Subjects | Mean PC1 | Std |\n")
-            f.write("|-----------|----------|----------|-----|\n")
+            f.write("| Condition | Subjects | Mean PC1 | Median PC1 | Std |\n")
+            f.write("|-----------|----------|----------|------------|-----|\n")
             for condition in CONDITIONS:
                 vals = list(pc1_maps.get(condition, {}).values())
                 if vals:
-                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.median(vals):.3f} | {np.std(vals):.3f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
@@ -1157,8 +1309,8 @@ def generate_pca_statistics():
             if pc1_maps.get('Active glove'):
                 f.write("**PC1 Hypothesis Test (subject-paired): Active glove < Others**\n\n")
                 f.write("##### Welch's t-test (one-tailed)\n\n")
-                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-                f.write("|------------|-------------------|--------|---------|-----------|----------|-----------|\n")
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | Median Diff | % Change | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|-------------|----------|-----------|\n")
 
                 active_pc1_map = pc1_maps['Active glove']
                 pc1_results = {}
@@ -1173,7 +1325,7 @@ def generate_pca_statistics():
                         support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
                         f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
-                               f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
+                               f"{results['mean_diff']:.3f} | {results['median_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
 
                 f.write("\n")
 
@@ -1216,12 +1368,12 @@ def generate_pca_statistics():
 
             # Summary statistics for PC2 (subject means)
             f.write("### PC2 Values (subject means)\n\n")
-            f.write("| Condition | Subjects | Mean PC2 | Std |\n")
-            f.write("|-----------|----------|----------|-----|\n")
+            f.write("| Condition | Subjects | Mean PC2 | Median PC2 | Std |\n")
+            f.write("|-----------|----------|----------|------------|-----|\n")
             for condition in CONDITIONS:
                 vals = list(pc2_maps.get(condition, {}).values())
                 if vals:
-                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.std(vals):.3f} |\n")
+                    f.write(f"| {condition} | {len(vals)} | {np.mean(vals):.3f} | {np.median(vals):.3f} | {np.std(vals):.3f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
@@ -1229,8 +1381,8 @@ def generate_pca_statistics():
             if pc2_maps.get('Active glove'):
                 f.write("**PC2 Hypothesis Test (subject-paired): Active glove < Others**\n\n")
                 f.write("##### Welch's t-test (one-tailed, absolute values)\n\n")
-                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-                f.write("|------------|-------------------|--------|---------|-----------|----------|-----------|\n")
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | Median Diff | % Change | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|-------------|----------|-----------|\n")
 
                 active_pc2_map = pc2_maps['Active glove']
                 pc2_results = {}
@@ -1245,7 +1397,7 @@ def generate_pca_statistics():
                         support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
                         f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
-                               f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
+                               f"{results['mean_diff']:.3f} | {results['median_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
 
                 f.write("\n")
 
@@ -1288,12 +1440,12 @@ def generate_pca_statistics():
 
             # Summary statistics for magnitude (subject means)
             f.write("### PCA Magnitude Statistics (subject means)\n\n")
-            f.write("| Condition | Subjects | Mean Magnitude | Std |\n")
-            f.write("|-----------|----------|----------------|-----|\n")
+            f.write("| Condition | Subjects | Mean Magnitude | Median Magnitude | Std |\n")
+            f.write("|-----------|----------|----------------|------------------|-----|\n")
             for condition in CONDITIONS:
                 mags = list(mag_maps.get(condition, {}).values())
                 if mags:
-                    f.write(f"| {condition} | {len(mags)} | {np.mean(mags):.3f} | {np.std(mags):.3f} |\n")
+                    f.write(f"| {condition} | {len(mags)} | {np.mean(mags):.3f} | {np.median(mags):.3f} | {np.std(mags):.3f} |\n")
                 else:
                     f.write(f"| {condition} | 0 | - | - |\n")
             f.write("\n")
@@ -1301,8 +1453,8 @@ def generate_pca_statistics():
             if mag_maps.get('Active glove'):
                 f.write("### Hypothesis Test: Active glove magnitude < Others (subject-paired)\n\n")
                 f.write("#### Parametric Test: Welch's t-test (one-tailed)\n\n")
-                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Supported? |\n")
-                f.write("|------------|-------------------|--------|---------|-----------|----------|-----------|\n")
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | Median Diff | % Change | Supported? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|-------------|----------|-----------|\n")
 
                 active_mag_map = mag_maps['Active glove']
                 mag_results = {}
@@ -1317,7 +1469,7 @@ def generate_pca_statistics():
                         support_text = "✓ YES" if results['hypothesis_supported_welch'] else "✗ NO"
                         f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
-                               f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
+                               f"{results['mean_diff']:.3f} | {results['median_diff']:.3f} | {results['percent_diff']:+.1f}% | **{support_text}** |\n")
 
                 f.write("\n")
 
@@ -1383,8 +1535,8 @@ def generate_pca_statistics():
                 pairwise_mag_results = {}
 
                 f.write("#### Parametric Test: Welch's t-test (two-tailed)\n\n")
-                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | % Change | Significant? |\n")
-                f.write("|------------|-------------------|--------|---------|-----------|----------|--------------|\n")
+                f.write("| Comparison | Subjects (paired) | t-stat | p-value | Mean Diff | Median Diff | % Change | Significant? |\n")
+                f.write("|------------|-------------------|--------|---------|-----------|-------------|----------|--------------|\n")
 
                 for cond1, cond2 in comparison_pairs:
                     if cond1 in mag_maps and cond2 in mag_maps:
@@ -1397,7 +1549,7 @@ def generate_pca_statistics():
                         sig_text = "✓ YES" if results['is_significant_welch'] else "✗ NO"
                         f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
                                f"{format_pvalue(results['p_welch'])} | "
-                               f"{results['mean_diff']:.3f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
+                               f"{results['mean_diff']:.3f} | {results['median_diff']:.3f} | {results['percent_diff']:+.1f}% | **{sig_text}** |\n")
 
                 f.write("\n")
 
@@ -1438,6 +1590,56 @@ def generate_pca_statistics():
                         f.write(f"| {cond1} vs {cond2} | {n_shared} | {results['cohens_d']:.3f} | "
                                f"{results['effect_size']} | {direction} |\n")
 
+                f.write("\n")
+
+            # --- Median-aggregated tests for PCA metrics ---
+            comparison_pairs_pca = [
+                ('Active glove', 'No glove'),
+                ('Passive glove', 'No glove'),
+                ('Active glove', 'Passive glove')
+            ]
+
+            f.write("### Statistical Tests on Subject-Level Medians (PCA)\n\n")
+            f.write("*Same tests as above, but each subject's value is their **median** across sessions (instead of mean).*\n\n")
+
+            for metric_name, median_map in [('PC1', pc1_median_maps), ('PC2', pc2_median_maps), ('Magnitude', mag_median_maps)]:
+                if 'Active glove' not in median_map:
+                    continue
+                active_median_map = median_map['Active glove']
+
+                f.write(f"#### {metric_name} — Hypothesis: Active < Other (median-aggregated)\n\n")
+                f.write("| Comparison | Subjects | t-stat | p (Welch) | W | p (Wilcoxon) | Supported? |\n")
+                f.write("|------------|----------|--------|-----------|---|--------------|------------|\n")
+
+                for other_cond in ['Passive glove', 'No glove']:
+                    if other_cond not in median_map:
+                        f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - |\n")
+                        continue
+                    active_vals, other_vals, shared = build_paired_lists(active_median_map, median_map[other_cond])
+                    if not shared:
+                        f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - |\n")
+                        continue
+                    results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
+                    support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+                    f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | "
+                            f"{format_pvalue(results['p_welch'])} | "
+                            f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{support_text}** |\n")
+                f.write("\n")
+
+                f.write(f"#### {metric_name} — Pairwise (two-tailed, median-aggregated)\n\n")
+                f.write("| Comparison | Subjects | t-stat | p (Welch) | W | p (Wilcoxon) | Mean Diff | Median Diff | Significant? |\n")
+                f.write("|------------|----------|--------|-----------|---|--------------|-----------|-------------|---------------|\n")
+                for cond1, cond2 in comparison_pairs_pca:
+                    if cond1 in median_map and cond2 in median_map:
+                        vals1, vals2, shared = build_paired_lists(median_map[cond1], median_map[cond2])
+                        if not shared:
+                            continue
+                        results = test_pairwise_comparison(vals1, vals2, cond1, cond2)
+                        sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
+                        f.write(f"| {cond1} vs {cond2} | {len(shared)} | {results['t_stat']:.3f} | "
+                               f"{format_pvalue(results['p_welch'])} | "
+                               f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | "
+                               f"{results['mean_diff']:.3f} | {results['median_diff']:.3f} | **{sig_text}** |\n")
                 f.write("\n")
 
             f.write("---\n\n")

@@ -81,4 +81,5 @@ crashlytics-build.properties
 *.so
 /exo_virt_Data/
 /exo_virt_2_Data/
+/exo_virt_BBT_Data/
 
