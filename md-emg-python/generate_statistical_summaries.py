@@ -190,6 +190,12 @@ def test_pairwise_comparison(group1_values, group2_values, group1_name, group2_n
     median_percent_diff = ((median_group1 - median_group2) / median_group2) * 100 if median_group2 != 0 else 0
     median_percent_reduction = ((median_group1 - median_group2) / median_group1) * 100 if median_group1 != 0 else 0
     
+    # Also compute median for reporting alongside
+    median_group1 = np.median(group1_values)
+    median_group2 = np.median(group2_values)
+    median_diff = median_group1 - median_group2
+    median_percent_diff = ((median_group1 - median_group2) / median_group2) * 100 if median_group2 != 0 else 0
+    
     # 6. Significance (two-tailed)
     is_significant_welch = p_welch < 0.05
     is_significant_mw = p_mw < 0.05
