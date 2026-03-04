@@ -80,6 +80,28 @@ class FSMConfig:
     
     # Debouncing
     state_change_cooldown_ms: float = 200      # Minimum time between state changes
+    
+    # --- Stability enhancements ---
+    
+    # Co-contraction rejection: ignore triggers when flexors and extensors
+    # fire simultaneously (e.g. arm stiffening during transport)
+    cocontraction_rejection_enabled: bool = True
+    cocontraction_ratio_min: float = 0.6       # Min extensor/flexor ratio to count as co-contraction
+    cocontraction_ratio_max: float = 1.4       # Max ratio (inverse); outside this range = intentional
+    cocontraction_min_amplitude: float = 0.2   # Both channels must exceed this to count
+    
+    # Dynamic baseline: use sliding-window percentile instead of slow EMA
+    # so thresholds float above postural/gravity EMG during arm movement
+    dynamic_baseline_enabled: bool = True
+    dynamic_baseline_window_sec: float = 2.0   # Length of the sliding window
+    dynamic_baseline_percentile: float = 5.0   # Percentile to use (e.g. 5th)
+    
+    # Confidence-gated temporal smoothing for CNN-LSTM fallback path:
+    # require N consecutive model predictions with confidence > threshold
+    # before the FSM registers an extensor trigger from the model
+    confidence_gating_enabled: bool = True
+    confidence_min_threshold: float = 0.70     # Minimum softmax confidence
+    confidence_consec_required: int = 5        # Consecutive high-confidence frames required
 
 
 class TriggerDetector:
@@ -105,10 +127,19 @@ class TriggerDetector:
         sustained_samples = int(config.trigger_sustained_ms * fsample / 1000)
         self.sustained_buffer = deque(maxlen=max(sustained_samples, 1))
         
-        # Baseline tracking (adaptive)
+        # Baseline tracking — choose between legacy EMA or dynamic percentile
         self.flexor_baseline = 0.1
         self.extensor_baseline = 0.1
-        self.baseline_alpha = 0.001  # Slow adaptation
+        self.baseline_alpha = 0.001  # Slow EMA adaptation (legacy fallback)
+        
+        # Dynamic baseline: sliding-window percentile
+        if config.dynamic_baseline_enabled:
+            win_samples = max(int(config.dynamic_baseline_window_sec * fsample), 1)
+            self.flexor_baseline_window = deque(maxlen=win_samples)
+            self.extensor_baseline_window = deque(maxlen=win_samples)
+        else:
+            self.flexor_baseline_window = None
+            self.extensor_baseline_window = None
         
         # State
         self.last_trigger_time = 0
@@ -135,6 +166,39 @@ class TriggerDetector:
         if max(flexor_activation, extensor_activation) > self.config.emergency_stop_threshold:
             return False, False, True
         
+        # --- Dynamic baseline update (sliding-window percentile) ---
+        if self.config.dynamic_baseline_enabled and self.flexor_baseline_window is not None:
+            self.flexor_baseline_window.append(flexor_activation)
+            self.extensor_baseline_window.append(extensor_activation)
+            if len(self.flexor_baseline_window) >= 10:  # need minimal samples
+                self.flexor_baseline = float(np.percentile(
+                    list(self.flexor_baseline_window),
+                    self.config.dynamic_baseline_percentile
+                ))
+                self.extensor_baseline = float(np.percentile(
+                    list(self.extensor_baseline_window),
+                    self.config.dynamic_baseline_percentile
+                ))
+        else:
+            # Legacy EMA baseline (only during low activity)
+            if flexor_activation < self.config.flexor_trigger_threshold * 0.5:
+                self.flexor_baseline = (1 - self.baseline_alpha) * self.flexor_baseline + \
+                                       self.baseline_alpha * flexor_activation
+            if extensor_activation < self.config.extensor_trigger_threshold * 0.5:
+                self.extensor_baseline = (1 - self.baseline_alpha) * self.extensor_baseline + \
+                                         self.baseline_alpha * extensor_activation
+        
+        # --- Co-contraction rejection ---
+        if self.config.cocontraction_rejection_enabled:
+            both_above_min = (flexor_activation >= self.config.cocontraction_min_amplitude and
+                              extensor_activation >= self.config.cocontraction_min_amplitude)
+            if both_above_min and flexor_activation > 0:
+                ratio = extensor_activation / flexor_activation
+                if (self.config.cocontraction_ratio_min <= ratio
+                        <= self.config.cocontraction_ratio_max):
+                    # Simultaneous activation — likely arm stiffening, not intent
+                    return False, False, False
+        
         # Flexor trigger detection
         flexor_triggered = self._check_trigger(
             self.flexor_history,
@@ -148,14 +212,6 @@ class TriggerDetector:
             self.extensor_baseline,
             self.config.extensor_trigger_threshold
         )
-        
-        # Update baselines (only during low activity)
-        if flexor_activation < self.config.flexor_trigger_threshold * 0.5:
-            self.flexor_baseline = (1 - self.baseline_alpha) * self.flexor_baseline + \
-                                   self.baseline_alpha * flexor_activation
-        if extensor_activation < self.config.extensor_trigger_threshold * 0.5:
-            self.extensor_baseline = (1 - self.baseline_alpha) * self.extensor_baseline + \
-                                     self.baseline_alpha * extensor_activation
         
         # Record trigger time
         if flexor_triggered or extensor_triggered:
@@ -189,6 +245,11 @@ class TriggerDetector:
         self.flexor_history.clear()
         self.extensor_history.clear()
         self.last_trigger_time = 0
+        self.flexor_baseline = 0.1
+        self.extensor_baseline = 0.1
+        if self.flexor_baseline_window is not None:
+            self.flexor_baseline_window.clear()
+            self.extensor_baseline_window.clear()
 
 
 class TrajectoryGenerator:
@@ -559,12 +620,26 @@ def FSMControlLoop(
         max_grasp_duration_sec=fsm_settings.get('max_grasp_duration_sec', 30.0),
         flexor_channels=fsm_settings.get('flexor_channels', list(range(0, 16))),
         extensor_channels=fsm_settings.get('extensor_channels', list(range(16, 32))),
+        # Stability enhancements
+        cocontraction_rejection_enabled=fsm_settings.get('cocontraction_rejection_enabled', True),
+        cocontraction_ratio_min=fsm_settings.get('cocontraction_ratio_min', 0.6),
+        cocontraction_ratio_max=fsm_settings.get('cocontraction_ratio_max', 1.4),
+        cocontraction_min_amplitude=fsm_settings.get('cocontraction_min_amplitude', 0.2),
+        dynamic_baseline_enabled=fsm_settings.get('dynamic_baseline_enabled', True),
+        dynamic_baseline_window_sec=fsm_settings.get('dynamic_baseline_window_sec', 2.0),
+        dynamic_baseline_percentile=fsm_settings.get('dynamic_baseline_percentile', 5.0),
+        confidence_gating_enabled=fsm_settings.get('confidence_gating_enabled', True),
+        confidence_min_threshold=fsm_settings.get('confidence_min_threshold', 0.70),
+        confidence_consec_required=fsm_settings.get('confidence_consec_required', 5),
     )
     
     print(f"  ✓ Grasp locking: {'ENABLED' if config.lock_grasp_enabled else 'DISABLED'}")
     print(f"  ✓ Flexor threshold: {config.flexor_trigger_threshold}")
     print(f"  ✓ Extensor threshold: {config.extensor_trigger_threshold}")
     print(f"  ✓ Trajectory profile: {config.trajectory_profile}")
+    print(f"  ✓ Co-contraction rejection: {'ENABLED' if config.cocontraction_rejection_enabled else 'DISABLED'}")
+    print(f"  ✓ Dynamic baseline: {'ENABLED' if config.dynamic_baseline_enabled else 'DISABLED'}")
+    print(f"  ✓ Confidence gating: {'ENABLED' if config.confidence_gating_enabled else 'DISABLED'}")
     print('='*60 + '\n')
     
     # Initialize FSM
@@ -604,6 +679,9 @@ def FSMControlLoop(
     
     last_gesture_sent = None
     last_state_sent = None
+    
+    # --- Confidence-gated temporal smoothing for CNN-LSTM fallback ---
+    confidence_gate_buffer = deque(maxlen=config.confidence_consec_required)
     
     def send_to_unity(state_name: str, output: Dict):
         """Send FSM state update to Unity via events socket."""
@@ -715,12 +793,33 @@ def FSMControlLoop(
         else:
             # Fallback: use prediction and confidence as proxy
             # pred 1 = close (flexor), pred 2 = open (extensor)
+            
+            # --- Confidence-gated temporal smoothing ---
+            # Require N consecutive high-confidence predictions of the same
+            # class before allowing the FSM to see a trigger.
+            if config.confidence_gating_enabled:
+                if confidence >= config.confidence_min_threshold:
+                    confidence_gate_buffer.append(pred)
+                else:
+                    confidence_gate_buffer.clear()
+                
+                # Only accept if buffer is full AND all predictions agree
+                if (len(confidence_gate_buffer) == config.confidence_consec_required
+                        and len(set(confidence_gate_buffer)) == 1):
+                    gated_pred = confidence_gate_buffer[0]
+                    # Reset so next trigger needs a fresh streak
+                    confidence_gate_buffer.clear()
+                else:
+                    gated_pred = 0  # Treat as rest while accumulating evidence
+            else:
+                gated_pred = pred
+            
             # Scale confidence to FSM-friendly range (0.3-0.7) to avoid emergency stop
             scaled_conf = 0.3 + (confidence * 0.4)  # Maps 0-1 to 0.3-0.7
-            if pred == 1:
+            if gated_pred == 1:
                 flexor_act = scaled_conf
                 extensor_act = 0.1
-            elif pred == 2:
+            elif gated_pred == 2:
                 flexor_act = 0.1
                 extensor_act = scaled_conf
             else:

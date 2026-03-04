@@ -71,6 +71,29 @@ fsm_control:
   # Debouncing
   state_change_cooldown_ms: 200 # Prevent rapid state oscillation
 
+  # *** Co-contraction Rejection ***
+  # Ignore triggers when flexors and extensors fire simultaneously,
+  # which happens during arm stiffening/transport (not intentional grasp/release).
+  cocontraction_rejection_enabled: true
+  cocontraction_ratio_min: 0.60 # Min ext/flex ratio to count as co-contraction
+  cocontraction_ratio_max: 1.40 # Max ratio; outside this band = intentional
+  cocontraction_min_amplitude: 0.20 # Both channels must exceed this to check
+
+  # *** Dynamic Baseline (Gravity-Compensated) ***
+  # Uses a sliding-window percentile instead of slow EMA, so thresholds
+  # float above postural/gravity-fighting EMG during arm movement.
+  dynamic_baseline_enabled: true
+  dynamic_baseline_window_sec: 2.0 # Sliding window length
+  dynamic_baseline_percentile: 5.0 # Use 5th percentile as floor
+
+  # *** Confidence-Gated Temporal Smoothing ***
+  # For the CNN-LSTM fallback path: require N consecutive model predictions
+  # with confidence above threshold before the FSM accepts a trigger.
+  # Prevents transient misclassifications from breaking LOCKED_GRASP.
+  confidence_gating_enabled: true
+  confidence_min_threshold: 0.70 # Minimum softmax probability
+  confidence_consec_required: 5 # Consecutive high-confidence frames needed
+
 # =============================================================================
 # CNN-LSTM Model Settings
 # =============================================================================
