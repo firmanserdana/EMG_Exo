@@ -1528,7 +1528,8 @@ class EMGAnalyzer:
         return np.asarray(windows)
     
     def figure_b_raw_comparison(self, data_dict: Dict[str, Dict[int, List[SegmentRecord]]], 
-                               object_id: int = 0, save_prefix: str = 'figureB') -> plt.Figure:
+                               object_id: int = 0, save_prefix: str = 'figureB',
+                               use_median: bool = False) -> plt.Figure:
         """
         Figure B: Compare raw EMG data across 3 conditions for one object
         Shows side-by-side heatmaps and direct overlay to emphasize differences
@@ -1537,7 +1538,10 @@ class EMGAnalyzer:
             data_dict: {condition: {object_id: [segments]}}
             object_id: Which object/pattern to plot
             save_prefix: Prefix for saved figure
+            use_median: If True, aggregate segments with median instead of mean
         """
+        agg_func = np.median if use_median else np.mean
+        agg_label = 'Median' if use_median else 'Mean'
         condition_data: Dict[str, np.ndarray] = {}
         condition_segment_means: Dict[str, List[float]] = defaultdict(list)
         condition_trial_counts: Dict[str, int] = {}
@@ -1560,7 +1564,7 @@ class EMGAnalyzer:
                 segment = self._normalize_segment(record.samples, record.subject)
                 rms = self.compute_rms(segment, window_ms=100)
                 all_segments.append(rms)
-                condition_segment_means[condition].append(float(np.mean(rms)))
+                condition_segment_means[condition].append(float(agg_func(rms)))
                 durations.append(record.end_time - record.start_time)
             
             # Resample each segment to the longest available so we keep full coverage
@@ -1569,12 +1573,15 @@ class EMGAnalyzer:
                 self._resample_to_length(seg, target_len_cond) if seg.shape[0] != target_len_cond else seg
                 for seg in all_segments
             ]
-            avg_rms = np.mean(resampled_segments, axis=0)
+            avg_rms = agg_func(resampled_segments, axis=0)
             condition_data[condition] = avg_rms
             condition_durations[condition] = durations
-            # For consistency with time-series and distribution: use the same averaged matrix
-            # Take channel means over the already averaged time x channel matrix
-            condition_spatial_means[condition] = condition_data[condition].mean(axis=0)
+            # For consistency with time-series and distribution: use the same aggregated matrix
+            # Take channel aggregation over the already aggregated time x channel matrix
+            if use_median:
+                condition_spatial_means[condition] = np.median(condition_data[condition], axis=0)
+            else:
+                condition_spatial_means[condition] = condition_data[condition].mean(axis=0)
         
         if not condition_data:
             print(f"No valid data for object {object_id}")
@@ -1613,16 +1620,16 @@ class EMGAnalyzer:
                 vmax=vmax,
                 cmap='magma'
             )
-            ax.set_title(f'{condition}\nMean: {condition_spatial_means[condition].mean():.1f} %MVC', 
+            ax.set_title(f'{condition}\n{agg_label}: {condition_spatial_means[condition].mean():.1f} %MVC', 
                         fontsize=14, fontweight='bold')
-            plt.colorbar(sm, ax=ax, label='Mean RMS (%MVC)')
+            plt.colorbar(sm, ax=ax, label=f'{agg_label} RMS (%MVC)')
         
         # Row 2: Channel-wise mean amplitude comparison (bar plot)
         ax_bar = fig.add_subplot(gs[1, :])
         
         channel_means = {}
         for condition in plot_conditions:
-            channel_means[condition] = condition_data[condition].mean(axis=0)
+            channel_means[condition] = agg_func(condition_data[condition], axis=0)
         
         x = np.arange(NUM_CHANNELS)
         width = 0.25
@@ -1637,8 +1644,8 @@ class EMGAnalyzer:
             ax_bar.set_ylim(0, bar_max * 1.1 if bar_max > 0 else 1)
         
         ax_bar.set_xlabel('Channel', fontsize=12, fontweight='bold')
-        ax_bar.set_ylabel('Mean RMS Amplitude (%MVC)', fontsize=12, fontweight='bold')
-        ax_bar.set_title('Channel-wise Amplitude Comparison', fontsize=14, fontweight='bold')
+        ax_bar.set_ylabel(f'{agg_label} RMS Amplitude (%MVC)', fontsize=12, fontweight='bold')
+        ax_bar.set_title(f'Channel-wise Amplitude Comparison ({agg_label})', fontsize=14, fontweight='bold')
         ax_bar.set_xticks(x[::2])
         ax_bar.set_xticklabels([f'{ch+1}' for ch in range(NUM_CHANNELS)][::2])
         ax_bar.legend(fontsize=11)
@@ -1704,13 +1711,13 @@ class EMGAnalyzer:
                 resampled_data = self._resample_to_length(data, target_temporal_len)
             else:
                 resampled_data = data
-            mean_over_channels = resampled_data.mean(axis=1)
+            mean_over_channels = agg_func(resampled_data, axis=1)
             color = MATLAB_CONDITION_BASE_COLORS.get(condition, CONDITION_COLORS.get(condition, '#1f77b4'))
             ax_overlay.plot(time, mean_over_channels, label=f'{condition} (n={trial_count})', 
                           linewidth=2.5, alpha=0.8, color=color)
         
         ax_overlay.set_xlabel('Time (s)', fontsize=11, fontweight='bold')
-        ax_overlay.set_ylabel('Mean RMS (all channels)', fontsize=11, fontweight='bold')
+        ax_overlay.set_ylabel(f'{agg_label} RMS (all channels)', fontsize=11, fontweight='bold')
         ax_overlay.set_title(f'Temporal Comparison ({target_temporal_len} samples)', fontsize=13, fontweight='bold')
         ax_overlay.legend(fontsize=9)
         ax_overlay.grid(True, alpha=0.3)
@@ -1723,7 +1730,7 @@ class EMGAnalyzer:
             ax_overlay.set_ylim(bottom=0)
         
         # Overall figure title
-        fig.suptitle(f'Comprehensive EMG Comparison Across Conditions - Object {object_id}', 
+        fig.suptitle(f'Comprehensive EMG Comparison ({agg_label}) - Object {object_id}', 
                     fontsize=18, fontweight='bold', y=0.98)
 
         stats_text = format_stats_text(plot_conditions, condition_stats, condition_comparisons)
@@ -1748,11 +1755,14 @@ class EMGAnalyzer:
         return fig
     
     def figure_b_amplitude_summary(self, data_dict: Dict[str, Dict[int, List[SegmentRecord]]], 
-                                   object_id: int = 0, save_prefix: str = 'figureB_summary') -> Optional[plt.Figure]:
+                                   object_id: int = 0, save_prefix: str = 'figureB_summary',
+                                   use_median: bool = False) -> Optional[plt.Figure]:
         """
         Statistical comparison of amplitude across conditions.
         Shows box plots and mean differences with significance indicators.
         """
+        agg_func = np.median if use_median else np.mean
+        agg_label = 'Median' if use_median else 'Mean'
         # Collect all RMS values per condition
         condition_rms_values = {}
         condition_mean_per_segment = {}
@@ -1771,7 +1781,7 @@ class EMGAnalyzer:
                 segment = self._normalize_segment(record.samples, record.subject)
                 rms = self.compute_rms(segment, window_ms=100)
                 all_rms.append(rms.flatten())  # All values
-                segment_means.append(rms.mean())  # Mean per segment
+                segment_means.append(float(agg_func(rms)))  # Aggregated per segment
             
             if all_rms:
                 condition_rms_values[condition] = np.concatenate(all_rms)
@@ -1870,8 +1880,8 @@ class EMGAnalyzer:
         
         ax2.set_xticks(positions2)
         ax2.set_xticklabels(labels2, fontsize=12, fontweight='bold')
-        ax2.set_ylabel('Mean RMS per Segment (%MVC)', fontsize=13, fontweight='bold')
-        ax2.set_title(f'Segment-wise Comparison (n={[len(condition_mean_per_segment[c]) for c in labels2]})', 
+        ax2.set_ylabel(f'{agg_label} RMS per Segment (%MVC)', fontsize=13, fontweight='bold')
+        ax2.set_title(f'Segment-wise Comparison ({agg_label}, n={[len(condition_mean_per_segment[c]) for c in labels2]})', 
                      fontsize=14, fontweight='bold')
         ax2.grid(True, alpha=0.3, axis='y')
         ax2.set_ylim(bottom=0)
@@ -1879,7 +1889,7 @@ class EMGAnalyzer:
         # Statistical tests moved to separate summary files
         # See: results-analysis/statistical_summary_amplitude.md
         
-        fig.suptitle(f'Statistical Amplitude Comparison - Object {object_id}', 
+        fig.suptitle(f'Statistical Amplitude Comparison ({agg_label}) - Object {object_id}', 
                     fontsize=16, fontweight='bold')
         stats_text = format_stats_text(plot_conditions, summary_stats, comparisons)
         if stats_text:
@@ -3506,6 +3516,18 @@ def main():
             plt.close('all')
         except Exception as e:
             print(f"  Error generating Figure B for object {obj_id}: {e}")
+
+    # Generate Figure B (MEDIAN) for all objects
+    print("\n--- Figure B: Raw Data Comparison (Median) ---")
+    for obj_id in object_ids:
+        print(f"\nGenerating Figure B (Median) for Object {obj_id}...")
+        try:
+            analyzer.figure_b_raw_comparison(data_dict, object_id=obj_id,
+                                           save_prefix='figureB_median',
+                                           use_median=True)
+            plt.close('all')
+        except Exception as e:
+            print(f"  Error generating Figure B (Median) for object {obj_id}: {e}")
     
     # Generate amplitude summary for ALL objects (not just primary)
     print("\n--- Figure B: Amplitude Summary (All Objects) ---")
@@ -3516,6 +3538,18 @@ def main():
             plt.close('all')
         except Exception as e:
             print(f"  Error generating amplitude summary for object {obj_id}: {e}")
+
+    # Generate amplitude summary (MEDIAN) for ALL objects
+    print("\n--- Figure B: Amplitude Summary (Median, All Objects) ---")
+    for obj_id in object_ids:
+        print(f"\nGenerating amplitude summary (Median) for Object {obj_id}...")
+        try:
+            analyzer.figure_b_amplitude_summary(data_dict, object_id=obj_id,
+                                               save_prefix='figureB_summary_median',
+                                               use_median=True)
+            plt.close('all')
+        except Exception as e:
+            print(f"  Error generating amplitude summary (Median) for object {obj_id}: {e}")
     
     # Skip heatmap generation (focus on summary figures only)
     # # Generate Figure C heatmaps for all NUM_GESTURES objects
