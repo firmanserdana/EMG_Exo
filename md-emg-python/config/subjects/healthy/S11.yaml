@@ -9,11 +9,35 @@ task_open_close:
     - 3
     - 4
     - 5
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
+    - 18
+    - 19
+    - 20
+    - 21
+    - 22
+    - 23
+    - 24
+    - 25
+    - 26
+    - 27
+    - 28
+    - 29
+    - 30
+    - 31
+    - 32
+    - 33
   sessions_closed_loop: # valid sessions numbers in closed-loop modality
     - [2] # session 1
     - [13] # session 2
   invalid_sessions: [] # sessions to be ignored for data corruption or other reasons
-  model_type: "LSTM"
+  model_type: "CNNLSTM"
   seq_len: 5
 task_grasp_patterns:
   sessions_open_loop: [] # valid sessions numbers in open-loop modality
