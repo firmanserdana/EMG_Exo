@@ -185,7 +185,9 @@ if __name__ == "__main__":
     stream_queue = Queue() if streaming_active else None
 
     # Open connection to the amplifier      
-    num_channels_emg = emg_proc_cfg['num_channels_emg'] # number of EMG channels to be used       
+    num_channels_emg = emg_proc_cfg['num_channels_emg'] # number of EMG channels of the device
+    channel_range = emg_proc_cfg.get('channel_range', [0, num_channels_emg]) # [start, end) channel indices
+    num_channels_used = channel_range[1] - channel_range[0] # actual number of channels to record
     (conn_64,num_channels_64,fsample,bytes_in_sample) = connect_to_sq(ip_address, port, num_channels=num_channels_emg)
 
     if conn_64 is None:
@@ -195,7 +197,8 @@ if __name__ == "__main__":
     # setup params
     acq_params = {
         'num_channels_64': num_channels_64, # number of total channels from the 64
-        'num_channels_emg': num_channels_emg, # number of EMG channels to be used
+        'num_channels_emg': num_channels_used, # number of EMG channels to be used
+        'channel_range': channel_range, # [start, end) channel indices to record
         'fsample': fsample, 
         'buffer_length': emg_proc_cfg['acq_buffer_length'],
         'bytes_in_sample': bytes_in_sample,

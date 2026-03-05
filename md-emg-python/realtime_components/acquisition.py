@@ -13,6 +13,8 @@ def AcquisitionLoop(conn_64, acq_params, dec_params, dec_queue, save_queue, stop
     # loading the acquisition and decoding parameters
     num_channels_64 = acq_params['num_channels_64']
     num_channels_emg = acq_params['num_channels_emg']
+    channel_range = acq_params.get('channel_range', [0, num_channels_emg]) # [start, end) channel indices
+    ch_start, ch_end = channel_range[0], channel_range[1]
     fsample = acq_params['fsample']
     acq_buffer_length = acq_params['buffer_length']
     bytes_in_sample = acq_params['bytes_in_sample']
@@ -133,8 +135,8 @@ def AcquisitionLoop(conn_64, acq_params, dec_params, dec_queue, save_queue, stop
         sample_from_channels = bytes_to_integers(sample_bytes, num_channels_64, bytes_in_sample, output_milli_volts=False)
 
         # saving the data in the buffer (filling it like a circular buffer)
-        buffer_data.append(np.concatenate((sample_from_channels[:num_channels_emg], [timestamp]))) # 1st sample
-        buffer_data.append(np.concatenate((sample_from_channels[num_channels_64:num_channels_64+num_channels_emg], [timestamp]))) # 2nd sample
+        buffer_data.append(np.concatenate((sample_from_channels[ch_start:ch_end], [timestamp]))) # 1st sample
+        buffer_data.append(np.concatenate((sample_from_channels[num_channels_64+ch_start:num_channels_64+ch_end], [timestamp]))) # 2nd sample
 
         sample_i += 2
 

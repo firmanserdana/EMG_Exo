@@ -30,6 +30,8 @@ def AcquisitionLoop(connection, acq_params, dec_params, dec_queue, save_queue, s
     # loading the acquisition and decoding parameters
     num_channels_64 = acq_params['num_channels_64']
     num_channels_emg = acq_params['num_channels_emg']
+    channel_range = acq_params.get('channel_range', [0, num_channels_emg]) # [start, end) channel indices
+    ch_start, ch_end = channel_range[0], channel_range[1]
     fsample = acq_params['fsample']
     acq_buffer_length = acq_params['buffer_length']
     bytes_in_sample = acq_params['bytes_in_sample']
@@ -92,8 +94,8 @@ def AcquisitionLoop(connection, acq_params, dec_params, dec_queue, save_queue, s
         sample_from_channels = bytes_to_integers(sample_bytes, num_channels_64, bytes_in_sample, output_milli_volts=False)
 
         # saving the data in the buffer (filling it like a circular buffer)
-        buffer_data.append(np.concatenate((sample_from_channels[:num_channels_emg], [timestamp]))) # 1st sample
-        buffer_data.append(np.concatenate((sample_from_channels[num_channels_64:num_channels_64+num_channels_emg], [timestamp]))) # 2nd sample
+        buffer_data.append(np.concatenate((sample_from_channels[ch_start:ch_end], [timestamp]))) # 1st sample
+        buffer_data.append(np.concatenate((sample_from_channels[num_channels_64+ch_start:num_channels_64+ch_end], [timestamp]))) # 2nd sample
 
         sample_i += 2
 
@@ -423,13 +425,16 @@ if __name__ == "__main__":
         pred_save_queue = Queue() # predictions queue for the saving of the predictions
 
     # Open connection to the amplifier      
-    num_channels_emg = emg_proc_cfg['num_channels_emg'] # number of EMG channels to be used       
+    num_channels_emg = emg_proc_cfg['num_channels_emg'] # number of EMG channels of the device
+    channel_range = emg_proc_cfg.get('channel_range', [0, num_channels_emg]) # [start, end) channel indices
+    num_channels_used = channel_range[1] - channel_range[0] # actual number of channels to record
     (connection,num_channels_64,fsample,bytes_in_sample) = connect_to_sq(ip_address, port, num_channels=num_channels_emg)
 
     # setup params
     acq_params = {
         'num_channels_64': num_channels_64, # number of total channels from the 64
-        'num_channels_emg': num_channels_emg, # number of EMG channels to be used
+        'num_channels_emg': num_channels_used, # number of EMG channels to be used
+        'channel_range': channel_range, # [start, end) channel indices to record
         'fsample': fsample, 
         'buffer_length': emg_proc_cfg['acq_buffer_length'],
         'bytes_in_sample': bytes_in_sample,
