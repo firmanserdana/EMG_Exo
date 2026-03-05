@@ -11,6 +11,7 @@ from models.lstm_model import *
 from models.tfm_model import *
 from models.ctfm_model import *
 from models.crnn_model import *
+from models.cnn_lstm_model import *
 from utils.dataset_emg import *
 from utils.data_utils import *
 from utils.nn_utils import *
@@ -77,7 +78,7 @@ models_cfg_file = os.path.join('config', 'models', f'{model_type}_cfg.yaml')
 with open(models_cfg_file, 'r') as file:
     model_cfg = yaml.safe_load(file)
 
-training_cfg['scheduler'] = model_cfg['scheduler'] # the definition of the scheduler is model dependent
+training_cfg['scheduler'] = model_cfg.get('scheduler', model_cfg.get('training', {}).get('scheduler', 'reduceonplateau')) # the definition of the scheduler is model dependent
 
 data_file_name = os.path.join(data_folder, f"{acquisition_type}_{task}_data.pkl")
 
@@ -203,6 +204,17 @@ elif model_type == 'CRNN':
         num_layers=model_cfg['num_layers'],
         num_output=num_class,
         drop_prob=model_cfg['dropout']
+    )
+elif model_type == 'CNNLSTM':
+    model = CNNLSTMModel(
+        input_channels=model_cfg.get('input_channels', num_channels),
+        virtual_channels=model_cfg['spatial_cnn']['virtual_channels'],
+        hidden_size=model_cfg['temporal_lstm']['hidden_size'],
+        num_layers=model_cfg['temporal_lstm']['num_layers'],
+        num_classes=num_class,
+        use_attention=model_cfg['spatial_cnn'].get('use_attention', True),
+        electrode_dropout=model_cfg['regularization'].get('electrode_dropout', 0.1),
+        dropout=model_cfg['regularization'].get('dropout', 0.3)
     )
 else:
     raise ValueError(f"Unknown model type: {model_type}")

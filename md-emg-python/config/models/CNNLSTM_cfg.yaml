@@ -51,7 +51,7 @@ training:
   batch_size: 64
   learning_rate: 0.001
   optimizer: "AdamW" # Options: Adam, AdamW, SGD
-  scheduler: "plateau" # Options: plateau, cosine, step, none
+  scheduler: "reduceonplateau" # Options: reduceonplateau, cosine-warmup, steplr
 
   # Early stopping
   patience: 15
