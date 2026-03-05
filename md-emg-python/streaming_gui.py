@@ -202,7 +202,8 @@ def main():
     num_classes = 4
     n_samples_raw = gui_cfg['raw_signal_length'] * emg_proc_cfg['fsample_emg']
     n_samples_prob = gui_cfg['pred_probs_num']
-    n_channels = emg_proc_cfg['num_channels_emg']
+    channel_range = emg_proc_cfg.get('channel_range', [0, emg_proc_cfg['num_channels_emg']])
+    n_channels = channel_range[1] - channel_range[0]  # actual number of channels being streamed
 
     data_x = deque(maxlen=n_samples_raw)
     data_y = [deque(maxlen=n_samples_raw) for _ in range(n_channels)]

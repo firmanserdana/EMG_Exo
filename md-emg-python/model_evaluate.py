@@ -54,7 +54,8 @@ with open(os.path.join(config_folder, 'features_params.yaml')) as f:
 model_type = subj_cfg[f'task_{task}']['model_type'] # options: ['LSTM', 'TFM', 'CTFM']
 model_file = os.path.join(models_folder, f'{model_type}_{model_version}.pth')
 
-num_channels_emg = emg_proc_cfg['num_channels_emg']
+channel_range = emg_proc_cfg.get('channel_range', [0, emg_proc_cfg['num_channels_emg']])
+num_channels_emg = channel_range[1] - channel_range[0]  # actual number of recorded channels
 fsample = emg_proc_cfg['fsample_emg']
 
 seq_len = subj_cfg[f'task_{task}']['seq_len']

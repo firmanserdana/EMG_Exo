@@ -26,7 +26,8 @@ with open(os.path.join(config_folder, 'emg_signal_processing.yaml')) as f:
     emg_proc_cfg = yaml.load(f, Loader=yaml.FullLoader)
 
 # initializing variables
-num_channels_emg = emg_proc_cfg['num_channels_emg']
+channel_range = emg_proc_cfg.get('channel_range', [0, emg_proc_cfg['num_channels_emg']])
+num_channels_emg = channel_range[1] - channel_range[0]  # actual number of recorded channels
 results_accuracy = []
 
 # loop through subjects and tasks

@@ -246,7 +246,8 @@ def extract_mvc_data(mvc_file, events_file, emg_proc_cfg):
     
     Returns:
     """
-    num_channels = emg_proc_cfg['num_channels_emg']
+    channel_range = emg_proc_cfg.get('channel_range', [0, emg_proc_cfg['num_channels_emg']])
+    num_channels = channel_range[1] - channel_range[0]
     fsample = emg_proc_cfg['fsample_emg']
 
     # Load data and events
@@ -517,7 +518,8 @@ def extract_neural_features(
     - neural_features: Extracted neural features.
     - labels: Corresponding labels for the features.
     """
-    num_channels = emg_proc_cfg['num_channels_emg']
+    channel_range = emg_proc_cfg.get('channel_range', [0, emg_proc_cfg['num_channels_emg']])
+    num_channels = channel_range[1] - channel_range[0]
     fsample = emg_proc_cfg['fsample_emg']
 
     feature_type = features_cfg['feature_type']
@@ -693,7 +695,8 @@ def extract_neural_data(data_file, events_file, emg_proc_cfg, logging=True):
     - neural_features: Extracted neural features.
     - labels: Corresponding labels for the features.
     """
-    num_channels = emg_proc_cfg['num_channels_emg']
+    channel_range = emg_proc_cfg.get('channel_range', [0, emg_proc_cfg['num_channels_emg']])
+    num_channels = channel_range[1] - channel_range[0]
     fsample = emg_proc_cfg['fsample_emg']
 
     # Load data and events

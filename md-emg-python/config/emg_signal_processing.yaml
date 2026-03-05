@@ -1,5 +1,6 @@
 # EMG configuration parameters
-num_channels_emg: 32 # number of EMG channels of the setup (by default starting from 0)
+num_channels_emg: 64 # number of EMG channels of the setup (by default starting from 0)
+channel_range: [32, 64] # [start, end) channel indices to record (e.g. [0, 64] for all, [32, 64] for channels 33-64)
 fsample_emg: 1000 # [Hz] sampling rate of the EMG data
 
 # acquisition parameters
