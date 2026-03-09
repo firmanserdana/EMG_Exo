@@ -7,9 +7,9 @@ from matplotlib import pyplot as plt
 from utils.data_utils import *
 from utils.signal_filtering import *
 
-subj_type = 'healthy' # 'healthy' or 'SCI'
-subj = 0
-session_num = 2
+subj_type = 'SCI' # 'healthy' or 'SCI'
+subj = 4
+session_num = 3
 rest_mvc_data = False # to export the rest and MVC data file
 
 # folders definition
@@ -80,8 +80,12 @@ for ch in range(num_channels_emg):
 
 if not rest_mvc_data:
     # retrieving events (convert to numpy arrays for scalar subtraction)
-    grasps_start = np.array([event[1] for event in events if event[0].startswith('grasp_start')]) - timestamps[0]
-    grasp_released = np.array([event[1] for event in events if event[0] == 'grasp_released']) - timestamps[0]
+    # Handle both old tuple format and new dictionary format
+    def _evt_type(e): return e['event_type'] if isinstance(e, dict) else e[0]
+    def _evt_time(e): return e['timestamp'] if isinstance(e, dict) else e[1]
+
+    grasps_start = np.array([_evt_time(event) for event in events if _evt_type(event).startswith('grasp_start')]) - timestamps[0]
+    grasp_released = np.array([_evt_time(event) for event in events if _evt_type(event) == 'grasp_released']) - timestamps[0]
 
     # plot the events
     for event in grasps_start:
