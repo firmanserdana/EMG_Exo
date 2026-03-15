@@ -48,7 +48,7 @@ from scripts.pretrain_healthy import (
     parse_gesture_timestamps,
     prepare_open_close_data,
 )
-from scripts.test_sci_transfer import extract_grasp_windows, load_session as load_sci_session
+from scripts.test_sci_transfer import extract_grasp_windows, load_data_numpy
 from utils.data_utils import create_events_df
 
 
@@ -411,6 +411,7 @@ def optimize_hyperparams(
     device: torch.device,
     study_name: str,
     hpo_storage: Optional[str],
+    no_improve_patience: int,
 ) -> Dict[str, float]:
     try:
         optuna = importlib.import_module("optuna")
@@ -475,11 +476,42 @@ def optimize_hyperparams(
                 f"trial={trial_obj.number} value={trial_obj.value} best={best_val} total_trials={len(study_obj.trials)}\n"
             )
 
+        # Early-stop HPO if no improvement for N consecutive trials.
+        if no_improve_patience > 0 and len(study_obj.trials) > 0:
+            best_trial_num = study_obj.best_trial.number
+            no_improve_count = trial_obj.number - best_trial_num
+            if no_improve_count >= no_improve_patience:
+                with open(progress_log_path, "a", encoding="utf-8") as f:
+                    f.write(
+                        "early_stop_no_improvement "
+                        f"patience={no_improve_patience} "
+                        f"best_trial={best_trial_num} "
+                        f"last_trial={trial_obj.number}\n"
+                    )
+                study_obj.stop()
+
     # If the study already has trials, write a snapshot before resuming.
     if len(study.trials) > 0:
         study.trials_dataframe().to_csv(trials_csv_path, index=False)
 
-    remaining_trials = max(0, n_trials - len(study.trials))
+    # If resumed study already stagnated, skip extra trials and reuse best params.
+    if no_improve_patience > 0 and len(study.trials) > 0:
+        best_trial_num = study.best_trial.number
+        last_trial_num = study.trials[-1].number
+        if (last_trial_num - best_trial_num) >= no_improve_patience:
+            with open(progress_log_path, "a", encoding="utf-8") as f:
+                f.write(
+                    "early_stop_no_improvement_on_resume "
+                    f"patience={no_improve_patience} "
+                    f"best_trial={best_trial_num} "
+                    f"last_trial={last_trial_num}\n"
+                )
+            remaining_trials = 0
+        else:
+            remaining_trials = max(0, n_trials - len(study.trials))
+    else:
+        remaining_trials = max(0, n_trials - len(study.trials))
+
     if remaining_trials > 0:
         study.optimize(objective, n_trials=remaining_trials, callbacks=[on_trial_complete])
 
@@ -609,14 +641,30 @@ def build_sci_manifest(base_dir: Path, subject: str, sessions: Sequence[int]) ->
     return entries
 
 
-def load_sci_windows(subject: str, sessions: Sequence[int]) -> Tuple[np.ndarray, np.ndarray, List[int]]:
+def load_sci_windows(base_dir: Path, subject: str, sessions: Sequence[int]) -> Tuple[np.ndarray, np.ndarray, List[int]]:
     X_list: List[np.ndarray] = []
     y_list: List[np.ndarray] = []
     used_sessions: List[int] = []
 
     for sess in sessions:
         try:
-            emg, timestamps, events = load_sci_session(subject, sess)
+            data_file = base_dir / subject / "raw" / f"session_{sess:02d}.npy"
+            event_file = base_dir / subject / "raw" / f"session_{sess:02d}_events.pkl"
+            if not data_file.exists() or not event_file.exists():
+                continue
+
+            data = load_data_numpy(str(data_file))
+            if data.size == 0 or data.ndim != 2 or data.shape[1] < (NUM_CHANNELS + 1):
+                continue
+
+            timestamps = data[:, -1]
+            emg = data[:, :NUM_CHANNELS]
+
+            import pickle
+
+            with open(event_file, "rb") as f:
+                events = pickle.load(f)
+
             X, y = extract_grasp_windows(emg, timestamps, events)
             if len(X) > 0:
                 X_list.append(X)
@@ -773,6 +821,19 @@ def generate_summary_figures(results_df: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
+def resolve_results_root(root: Path, output_dir_arg: str) -> Path:
+    output_path = Path(output_dir_arg)
+    if output_path.is_absolute():
+        return output_path
+
+    # Accept both "results-optimization" and "md-emg-python/results-optimization"
+    # without creating a nested "md-emg-python/md-emg-python" folder.
+    if output_path.parts and output_path.parts[0] == root.name:
+        output_path = Path(*output_path.parts[1:]) if len(output_path.parts) > 1 else Path(".")
+
+    return (root / output_path).resolve()
+
+
 def run_pipeline(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -780,7 +841,7 @@ def run_pipeline(args: argparse.Namespace) -> None:
     root = Path(__file__).resolve().parents[1]
     healthy_dir = root / "data" / "healthy"
     sci_dir = root / "data" / "SCI"
-    results_root = root / args.output_dir
+    results_root = resolve_results_root(root, args.output_dir)
     run_tag = args.run_tag.strip() if args.run_tag else datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = results_root / f"pipeline_{run_tag}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -788,6 +849,10 @@ def run_pipeline(args: argparse.Namespace) -> None:
     healthy_subjects = [s.strip() for s in args.healthy_subjects.split(",") if s.strip()]
     sci_subjects = [s.strip() for s in args.sci_subjects.split(",") if s.strip()]
     model_types = [m.strip().upper() for m in args.models.split(",") if m.strip()]
+    model_trial_limits: Dict[str, int] = {
+        "LSTM": args.lstm_n_trials if args.lstm_n_trials > 0 else args.n_trials,
+        "CNNLSTM": min(args.n_trials, args.cnnlstm_n_trials if args.cnnlstm_n_trials > 0 else args.n_trials),
+    }
 
     # Step 1: healthy manifest.
     manifest = discover_healthy_sessions(healthy_dir, healthy_subjects)
@@ -809,51 +874,83 @@ def run_pipeline(args: argparse.Namespace) -> None:
 
     X, _ = normalize_emg(X, method="zscore")
 
-    # Step 2: HPO + final pretraining.
+    # Step 2: HPO + final pretraining (or reuse existing pretrained checkpoints).
     pretrained_paths: Dict[str, Path] = {}
-    for model_type in model_types:
-        hpo_dir = out_dir / "hpo"
-        hpo_dir.mkdir(parents=True, exist_ok=True)
+    if args.skip_hpo_pretrain:
+        override_paths: Dict[str, Path] = {}
+        if args.pretrained_paths.strip():
+            # Format: LSTM=/abs/or/rel/path.pth,CNNLSTM=/abs/or/rel/path.pth
+            for token in [t.strip() for t in args.pretrained_paths.split(",") if t.strip()]:
+                if "=" not in token:
+                    continue
+                key, value = token.split("=", 1)
+                override_paths[key.strip().upper()] = Path(value.strip())
 
-        if args.disable_hpo_persistence:
-            hpo_storage_uri = None
-        elif args.hpo_storage_uri.strip():
-            hpo_storage_uri = args.hpo_storage_uri.strip()
-        else:
-            hpo_storage_uri = f"sqlite:///{(hpo_dir / 'optuna_studies.db').resolve()}"
+        for model_type in model_types:
+            if model_type in override_paths:
+                candidate = override_paths[model_type]
+            else:
+                candidate = root / "models" / "pretrained" / f"pretrained_{model_type.lower()}_open_close_best.pth"
 
-        study_name = f"{args.study_prefix}_{model_type.lower()}"
+            if not candidate.is_absolute():
+                candidate = (root / candidate).resolve()
 
-        best_params = optimize_hyperparams(
-            model_type=model_type,
-            X=X,
-            y=y,
-            out_dir=hpo_dir,
-            n_trials=args.n_trials,
-            hpo_epochs=args.hpo_epochs,
-            seed=args.seed,
-            device=device,
-            study_name=study_name,
-            hpo_storage=hpo_storage_uri,
-        )
-        model_out_dir = out_dir / "pretrained"
-        ckpt_path = train_final_pretrained(
-            model_type=model_type,
-            X=X,
-            y=y,
-            params=best_params,
-            out_dir=model_out_dir,
-            epochs=args.pretrain_epochs,
-            seed=args.seed,
-            device=device,
-        )
-        pretrained_paths[model_type] = ckpt_path
+            if not candidate.exists():
+                raise RuntimeError(f"Missing pretrained checkpoint for {model_type}: {candidate}")
 
-    # Also copy final checkpoints to default transfer-learning location.
+            pretrained_paths[model_type] = candidate
+    else:
+        for model_type in model_types:
+            hpo_dir = out_dir / "hpo"
+            hpo_dir.mkdir(parents=True, exist_ok=True)
+
+            if args.disable_hpo_persistence:
+                hpo_storage_uri = None
+            elif args.hpo_storage_uri.strip():
+                hpo_storage_uri = args.hpo_storage_uri.strip()
+            else:
+                hpo_storage_uri = f"sqlite:///{(hpo_dir / 'optuna_studies.db').resolve()}"
+
+            study_name = f"{args.study_prefix}_{model_type.lower()}"
+            per_model_n_trials = model_trial_limits.get(model_type, args.n_trials)
+
+            best_params = optimize_hyperparams(
+                model_type=model_type,
+                X=X,
+                y=y,
+                out_dir=hpo_dir,
+                n_trials=per_model_n_trials,
+                hpo_epochs=args.hpo_epochs,
+                seed=args.seed,
+                device=device,
+                study_name=study_name,
+                hpo_storage=hpo_storage_uri,
+                no_improve_patience=args.hpo_no_improve_patience,
+            )
+            model_out_dir = out_dir / "pretrained"
+            ckpt_path = train_final_pretrained(
+                model_type=model_type,
+                X=X,
+                y=y,
+                params=best_params,
+                out_dir=model_out_dir,
+                epochs=args.pretrain_epochs,
+                seed=args.seed,
+                device=device,
+            )
+            pretrained_paths[model_type] = ckpt_path
+
+    # Copy final checkpoints to default transfer-learning location.
+    # Use a pipeline-specific suffix so we never overwrite pretrain_healthy.py models.
     default_pretrained_dir = root / "models" / "pretrained"
     default_pretrained_dir.mkdir(parents=True, exist_ok=True)
     for model_type, src in pretrained_paths.items():
+        if src.parent.resolve() == default_pretrained_dir.resolve():
+            continue
         dst = default_pretrained_dir / src.name
+        if dst.exists():
+            # Avoid overwriting manually-trained models; save with _pipeline suffix
+            dst = dst.with_name(dst.stem + "_pipeline" + dst.suffix)
         torch.save(torch.load(src, map_location="cpu", weights_only=False), dst)
 
     # Step 3 + 4: SCI test and transfer.
@@ -878,8 +975,8 @@ def run_pipeline(args: argparse.Namespace) -> None:
             test_sessions = [valid_sessions[-1]]
             train_sessions = valid_sessions[:-1]
 
-        X_train_raw, y_train, used_train = load_sci_windows(subject, train_sessions)
-        X_test_raw, y_test, used_test = load_sci_windows(subject, test_sessions)
+        X_train_raw, y_train, used_train = load_sci_windows(sci_dir, subject, train_sessions)
+        X_test_raw, y_test, used_test = load_sci_windows(sci_dir, subject, test_sessions)
         if len(X_train_raw) == 0 or len(X_test_raw) == 0:
             continue
 
@@ -966,7 +1063,11 @@ def run_pipeline(args: argparse.Namespace) -> None:
         "healthy_subjects": healthy_subjects,
         "sci_subjects": sci_subjects,
         "models": model_types,
+        "skip_hpo_pretrain": bool(args.skip_hpo_pretrain),
         "n_trials": args.n_trials,
+        "lstm_n_trials": model_trial_limits.get("LSTM", args.n_trials),
+        "cnnlstm_n_trials": model_trial_limits.get("CNNLSTM", args.n_trials),
+        "hpo_no_improve_patience": args.hpo_no_improve_patience,
         "hpo_epochs": args.hpo_epochs,
         "pretrain_epochs": args.pretrain_epochs,
         "transfer_epochs": args.transfer_epochs,
@@ -986,6 +1087,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sci_subjects", default="S3,S4")
     parser.add_argument("--models", default="LSTM,CNNLSTM", help="Comma separated list")
     parser.add_argument("--n_trials", type=int, default=100)
+    parser.add_argument("--lstm_n_trials", type=int, default=100, help="Max HPO trials for LSTM")
+    parser.add_argument("--cnnlstm_n_trials", type=int, default=50, help="Max HPO trials for CNNLSTM")
+    parser.add_argument(
+        "--hpo_no_improve_patience",
+        type=int,
+        default=30,
+        help="Stop HPO when no new best appears for this many trials",
+    )
     parser.add_argument("--hpo_epochs", type=int, default=25)
     parser.add_argument("--pretrain_epochs", type=int, default=80)
     parser.add_argument("--transfer_epochs", type=int, default=40)
@@ -995,6 +1104,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--study_prefix", default="healthy_open_close", help="Optuna study name prefix")
     parser.add_argument("--hpo_storage_uri", default="", help="Optuna storage URI (sqlite:///... recommended)")
     parser.add_argument("--disable_hpo_persistence", action="store_true", help="Disable persistent Optuna storage")
+    parser.add_argument("--skip_hpo_pretrain", action="store_true", help="Reuse existing pretrained checkpoints and skip HPO/pretraining")
+    parser.add_argument(
+        "--pretrained_paths",
+        default="",
+        help="Optional checkpoint overrides, e.g. LSTM=/path/lstm.pth,CNNLSTM=/path/cnnlstm.pth",
+    )
     parser.add_argument("--seed", type=int, default=18)
     return parser.parse_args()
 

@@ -191,6 +191,13 @@ results-online/**/*.svg
 results-optimization/**/*.pkl
 results-optimization/**/*.csv
 results-optimization/**/*.png
+results-optimization/**/*.npy
+results-optimization/**/*.db
+results-optimization/**/*.pid
+results-optimization/**/*.log
+results-optimization/**/*.txt
+results-optimization/**/*.json
+results-optimization/**/*.pth
 models-subjects/**/*.pth
 debug/**/*.csv
 

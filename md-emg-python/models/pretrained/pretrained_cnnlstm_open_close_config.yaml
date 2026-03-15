@@ -1,6 +1,6 @@
 batch_size: 64
-best_val_acc: 0.715718418514947
-best_val_loss: 0.5728349247265879
+best_val_acc: 0.7139826422372227
+best_val_loss: 0.5707166805499937
 conditions:
 - no_glove
 - passive_glove
