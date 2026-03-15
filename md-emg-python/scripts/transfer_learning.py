@@ -40,6 +40,54 @@ from scripts.pretrain_healthy import (
 )
 
 
+def _build_model_from_checkpoint(checkpoint, device):
+    """Build model using architecture stored in checkpoint's model_hparams (pipeline models)
+    or fall back to fixed default architecture (pretrain_healthy.py models)."""
+    model_type = checkpoint['model_type']
+    num_classes = checkpoint['num_classes']
+    n_channels = checkpoint.get('n_channels', NUM_CHANNELS)
+    window_ms = checkpoint.get('window_ms', 200)
+    params = checkpoint.get('model_hparams', {})
+
+    if model_type == 'LSTM':
+        if params.get('hidden_size') or params.get('num_layers'):
+            # Pipeline HPO model - import TunableLSTM
+            try:
+                from scripts.train_transfer_pipeline_cli import TunableLSTM
+                model = TunableLSTM(
+                    input_size=n_channels,
+                    hidden_size=int(params['hidden_size']),
+                    num_layers=int(params['num_layers']),
+                    num_classes=num_classes,
+                    dropout=float(params.get('dropout', 0.3)),
+                )
+            except (ImportError, KeyError):
+                model = build_lstm_model(input_size=n_channels, num_classes=num_classes)
+        else:
+            model = build_lstm_model(input_size=n_channels, num_classes=num_classes)
+    else:  # CNNLSTM
+        seq_len = int(window_ms * 1000 / 1000)
+        if params.get('conv1_channels') or params.get('lstm_hidden'):
+            try:
+                from scripts.train_transfer_pipeline_cli import TunableCNNLSTM
+                model = TunableCNNLSTM(
+                    n_channels=n_channels,
+                    seq_len=seq_len,
+                    num_classes=num_classes,
+                    conv1_channels=int(params.get('conv1_channels', 64)),
+                    conv2_channels=int(params.get('conv2_channels', 128)),
+                    lstm_hidden=int(params.get('lstm_hidden', 64)),
+                    lstm_layers=int(params.get('lstm_layers', 2)),
+                    dropout=float(params.get('dropout', 0.3)),
+                )
+            except (ImportError, KeyError):
+                model = build_cnn_lstm_model(n_channels=n_channels, seq_len=seq_len, num_classes=num_classes)
+        else:
+            model = build_cnn_lstm_model(n_channels=n_channels, seq_len=seq_len, num_classes=num_classes)
+
+    return model
+
+
 def load_pretrained_model(pretrained_path: str, device: str = 'cuda'):
     """Load a pre-trained model with all metadata.
     
@@ -58,20 +106,9 @@ def load_pretrained_model(pretrained_path: str, device: str = 'cuda'):
     n_channels = checkpoint.get('n_channels', NUM_CHANNELS)
     window_ms = checkpoint.get('window_ms', 200)
     
-    # Build model architecture
-    if model_type == 'LSTM':
-        model = build_lstm_model(
-            input_size=n_channels,
-            num_classes=num_classes
-        )
-    else:  # CNNLSTM
-        seq_len = int(window_ms * 1000 / 1000)  # Assuming 1000 Hz
-        model = build_cnn_lstm_model(
-            n_channels=n_channels,
-            seq_len=seq_len,
-            num_classes=num_classes
-        )
-    
+    # Build model architecture (handles both fixed-arch and HPO-arch checkpoints)
+    model = _build_model_from_checkpoint(checkpoint, device)
+
     # Load weights
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
