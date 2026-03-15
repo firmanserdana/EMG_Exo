@@ -100,6 +100,35 @@ From repository root on remote:
 source md-emg-python/.venv/bin/activate
 python md-emg-python/scripts/train_transfer_pipeline_cli.py --run_all --healthy_subjects S1,S2,S3,S4,S5,S6,S7,S8,S9,S10 --sci_subjects S3,S4 --models LSTM,CNNLSTM --n_trials 100 --hpo_epochs 25 --pretrain_epochs 80 --transfer_epochs 40 --transfer_lr 5e-4 --output_dir md-emg-python/results-optimization --run_tag remote_resume_20260315 --study_prefix healthy_open_close --hpo_storage_uri sqlite:////home/<REMOTE_USER>/EMG_Exo/md-emg-python/results-optimization/pipeline_remote_resume_20260315/hpo/optuna_studies.db --seed 18
 
+## Run after disconnect (recommended)
+
+Yes. Start the job in a detached terminal session on remote WSL, then close VS Code tunnel.
+
+Option A: tmux (recommended)
+
+1. Install tmux once (if missing):
+  sudo apt-get update && sudo apt-get install -y tmux
+2. Start session:
+  tmux new -s emg_train
+3. Run training from repo root:
+  source md-emg-python/.venv/bin/activate
+  python md-emg-python/scripts/train_transfer_pipeline_cli.py --run_all --healthy_subjects S1,S2,S3,S4,S5,S6,S7,S8,S9,S10 --sci_subjects S3,S4 --models LSTM,CNNLSTM --n_trials 100 --hpo_epochs 25 --pretrain_epochs 80 --transfer_epochs 40 --transfer_lr 5e-4 --output_dir md-emg-python/results-optimization --run_tag remote_resume_20260315 --study_prefix healthy_open_close --hpo_storage_uri sqlite:////home/<REMOTE_USER>/EMG_Exo/md-emg-python/results-optimization/pipeline_remote_resume_20260315/hpo/optuna_studies.db --seed 18 2>&1 | tee md-emg-python/results-optimization/pipeline_remote_resume_20260315/remote_run.log
+4. Detach without stopping process:
+  Ctrl+b, then d
+5. Reconnect later:
+  tmux attach -t emg_train
+
+Option B: nohup (no interactive session)
+
+From repo root:
+
+nohup bash -lc 'source md-emg-python/.venv/bin/activate && python md-emg-python/scripts/train_transfer_pipeline_cli.py --run_all --healthy_subjects S1,S2,S3,S4,S5,S6,S7,S8,S9,S10 --sci_subjects S3,S4 --models LSTM,CNNLSTM --n_trials 100 --hpo_epochs 25 --pretrain_epochs 80 --transfer_epochs 40 --transfer_lr 5e-4 --output_dir md-emg-python/results-optimization --run_tag remote_resume_20260315 --study_prefix healthy_open_close --hpo_storage_uri sqlite:////home/<REMOTE_USER>/EMG_Exo/md-emg-python/results-optimization/pipeline_remote_resume_20260315/hpo/optuna_studies.db --seed 18' > md-emg-python/results-optimization/pipeline_remote_resume_20260315/remote_run.log 2>&1 &
+
+Check status:
+
+ps -ef | grep train_transfer_pipeline_cli.py | grep -v grep
+tail -n 100 md-emg-python/results-optimization/pipeline_remote_resume_20260315/remote_run.log
+
 ## Resume rule
 
 If interrupted, rerun the exact same command. The Optuna study is persistent and will continue from completed trials.
