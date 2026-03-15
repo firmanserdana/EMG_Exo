@@ -15,3 +15,4 @@ fastdtw==0.3.4
 matplotlib==3.10.1
 keyboard==0.13.5
 dearpygui==2.0.0
+optuna==3.6.1

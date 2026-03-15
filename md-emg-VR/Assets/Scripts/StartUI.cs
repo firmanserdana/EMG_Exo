@@ -9,7 +9,8 @@ public enum AcquisitionType
     ClosedLoop,
     MVC,
     DecodingFeedback,
-    BBT
+    BBT,
+    DecoderBBT
 }
 
 public enum GraspingType
@@ -46,6 +47,7 @@ public class StartUI : MonoBehaviour
     readonly static string mvcSceneName = "graspingMVC";
     readonly static string decodingFeedbackSceneName = "graspingFeedback";
     readonly static string bbtSceneName = "graspingBBT";
+    readonly static string decoderBbtSceneName = "graspingDecoderBBT";
 
     // GUI Elements
     public TMP_Dropdown acquisitionType, graspingType, dominantHand;
@@ -173,6 +175,22 @@ public class StartUI : MonoBehaviour
             // numTotalTrials = blocks × 2 (each block = 1 close + 1 open)
             SessionControl.numTotalTrials = GameSettings.numTrialsPerGrasp * 2;
             SceneManager.LoadScene(bbtSceneName);
+        }
+        else if (GameSettings.acquisitionType == AcquisitionType.DecoderBBT)
+        {
+            // Decoder-BBT uses the open/close labels and tracks moved/dropped metrics.
+            GameSettings.graspingType = GraspingType.HandOpenClose;
+            SessionControl.numTotalTrials = GameSettings.numTrialsPerGrasp * 2;
+
+            if (Application.CanStreamedLevelBeLoaded(decoderBbtSceneName))
+            {
+                SceneManager.LoadScene(decoderBbtSceneName);
+            }
+            else
+            {
+                Debug.LogWarning($"Scene '{decoderBbtSceneName}' not found in build settings. Falling back to '{bbtSceneName}'.");
+                SceneManager.LoadScene(bbtSceneName);
+            }
         }
     }
 
