@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -26,6 +27,7 @@ using UnityEngine.UI;
 public class ManagerBBT : MonoBehaviour
 {
     public static ManagerBBT Instance { get; private set; }
+    public static event Action<string, int?> OnLocalEventRegistered;
 
     [Header("Hands (auto-found if empty)")]
     public GameObject leftHand;
@@ -987,6 +989,8 @@ public class ManagerBBT : MonoBehaviour
     /// </summary>
     void RegisterEvent(string eventVal, int? eventID = null)
     {
+        OnLocalEventRegistered?.Invoke(eventVal, eventID);
+
         try
         {
             if (TcpServerManager.Instance != null)

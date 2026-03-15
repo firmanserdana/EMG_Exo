@@ -9,6 +9,23 @@ using UnityEngine;
 
 public class TcpServerManager : MonoBehaviour
 {
+    [Serializable]
+    private class RawTcpEvent
+    {
+        public string @event;
+        public int event_id;
+        public string eventName;
+        public int eventID;
+        public string fsmState;
+        public bool isLocked;
+        public float lockTime;
+        public float handPosition;
+        public float force;
+        public int blockCount;
+        public int graspCount;
+        public float sessionTime;
+    }
+
     public static TcpServerManager Instance { get; private set; }
 
     private TcpListener server;
@@ -90,8 +107,8 @@ public class TcpServerManager : MonoBehaviour
 
                 string msg_received = Encoding.UTF8.GetString(buffer, 0, bytesRead);
 
-                // Parsing the received event message
-                TCPEvent eventData = JsonUtility.FromJson<TCPEvent>(msg_received.TrimEnd('\n'));
+                // Parse both JSON schemas: {"event","event_id"} and {"eventName","eventID"}
+                TCPEvent eventData = ParseTcpEvent(msg_received.TrimEnd('\n'));
 
                 // Notify listeners on the main thread
                 UnityMainThreadDispatcher.Instance().Enqueue(() =>
@@ -112,6 +129,40 @@ public class TcpServerManager : MonoBehaviour
             {
                 ListenForClient(); // Recursively wait for the next client
             }
+        }
+    }
+
+    private TCPEvent ParseTcpEvent(string payload)
+    {
+        try
+        {
+            RawTcpEvent raw = JsonUtility.FromJson<RawTcpEvent>(payload);
+            if (raw == null)
+            {
+                return new TCPEvent();
+            }
+
+            string resolvedName = !string.IsNullOrEmpty(raw.eventName) ? raw.eventName : raw.@event;
+            int resolvedId = raw.eventID != 0 ? raw.eventID : raw.event_id;
+
+            return new TCPEvent
+            {
+                eventName = resolvedName,
+                eventID = resolvedId,
+                fsmState = raw.fsmState,
+                isLocked = raw.isLocked,
+                lockTime = raw.lockTime,
+                handPosition = raw.handPosition,
+                force = raw.force,
+                blockCount = raw.blockCount,
+                graspCount = raw.graspCount,
+                sessionTime = raw.sessionTime,
+            };
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("Failed to parse TCP payload: " + ex.Message + " | Payload: " + payload);
+            return new TCPEvent();
         }
     }
 

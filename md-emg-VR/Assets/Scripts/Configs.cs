@@ -79,3 +79,13 @@ public class BBTConfig
     public string[] graspLabels;        // ["HandClose", "HandOpen"]
     public int[] graspIDs;              // [1, 0] matching open-close IDs
 }
+
+[Serializable]
+public class DecoderBBTConfig
+{
+    public int sessionDurationSeconds;   // Nominal benchmark duration [s]
+    public int expectedCloseID;          // Decoder class id for hand close
+    public int expectedOpenID;           // Decoder class id for hand open
+    public int minPredictionsPerPhase;   // Minimum decoder samples to score a phase
+    public bool requireBothPhases;       // If true, both pickup and place must pass
+}

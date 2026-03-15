@@ -1,0 +1,7 @@
+{
+  "sessionDurationSeconds": 60,
+  "expectedCloseID": 1,
+  "expectedOpenID": 0,
+  "minPredictionsPerPhase": 1,
+  "requireBothPhases": true
+}
