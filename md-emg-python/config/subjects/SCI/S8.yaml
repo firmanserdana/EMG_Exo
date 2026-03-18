@@ -1,4 +1,4 @@
-subj_identifier: "S6" # the unique identifier for the subject
+subj_identifier: "S8" # the unique identifier for the subject
 sleeve: true # true if the EMG sleeve is used, false if bipolar electrodes are used
 
 task_open_close:

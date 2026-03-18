@@ -29,26 +29,36 @@ public class ManagerBBT : MonoBehaviour
     public static ManagerBBT Instance { get; private set; }
     public static event Action<string, int?> OnLocalEventRegistered;
 
+    /// <summary>
+    /// When non-null, TrialClose/TrialOpen yield on this coroutine instead of
+    /// running scripted hand animations. The delegate receives:
+    ///   HandController - the hand to animate
+    ///   bool           - true for close trial, false for open trial
+    ///   Action         - callback to invoke when the trial portion is done
+    /// Returns an IEnumerator that ManagerBBT will run as a coroutine.
+    /// </summary>
+    public static Func<HandController, bool, Action, IEnumerator> OverrideTrialAnimation;
+
     [Header("Hands (auto-found if empty)")]
     public GameObject leftHand;
     public GameObject rightHand;
 
     // --- Runtime references ---
-    private HandController handController;
-    private GameObject activeHand;
-    private BBTConfig config;
-    private bool isRightHand;
+    internal HandController handController;
+    internal GameObject activeHand;
+    internal BBTConfig config;
+    internal bool isRightHand;
 
     // --- Hand position tracking ---
-    private Vector3 handRestPosition;   // Original hand position (returned to on stop)
-    private Quaternion handRestRotation; // Original hand rotation
-    private Vector3 sourceHoverPos;     // Position above source zone
-    private Vector3 targetHoverPos;     // Position above target zone
+    internal Vector3 handRestPosition;   // Original hand position (returned to on stop)
+    internal Quaternion handRestRotation; // Original hand rotation
+    internal Vector3 sourceHoverPos;     // Position above source zone
+    internal Vector3 targetHoverPos;     // Position above target zone
 
     // --- Pronation angles (degrees) ---
     // The hand faces palm-down (pronated) when reaching for and carrying blocks,
     // then returns to neutral (supinated) when opening to release.
-    private const float PRONATION_ANGLE = 90f;  // Full pronation: palm faces down
+    internal const float PRONATION_ANGLE = 90f;  // Full pronation: palm faces down
 
     // --- GUI (all auto-created) ---
     private Button btnPlay;
@@ -56,13 +66,13 @@ public class ManagerBBT : MonoBehaviour
     private Button btnExit;
     private Text lblStatus;
     private Text lblInstruction;
-    private Text lblBlockCount;
-    private Text lblTimer;
+    internal Text lblBlockCount;
+    internal Text lblTimer;
 
     // --- BBT box objects ---
-    private Transform sourceZone;
-    private Transform targetZone;
-    private GameObject boxRoot;
+    internal Transform sourceZone;
+    internal Transform targetZone;
+    internal GameObject boxRoot;
     private List<GameObject> sourceBlocks = new List<GameObject>();
     private List<GameObject> placedBlocks = new List<GameObject>();
 
@@ -93,6 +103,19 @@ public class ManagerBBT : MonoBehaviour
     {
         Debug.Log("[BBT] ManagerBBT.Start()");
 
+        // If running in DecoderBBT mode, create the decoder manager now.
+        // This must happen here (not in RuntimeInitializeOnLoadMethod) because
+        // GameSettings.acquisitionType is only set after the user clicks Start in StartUI.
+        if (GameSettings.acquisitionType == AcquisitionType.DecoderBBT)
+        {
+            if (FindObjectOfType<ManagerDecoderBBT>() == null)
+            {
+                GameObject go = new GameObject("ManagerDecoderBBT_Auto");
+                go.AddComponent<ManagerDecoderBBT>();
+                Debug.Log("[BBT] Created ManagerDecoderBBT for decoder-driven mode");
+            }
+        }
+
         try
         {
             BuildGUI();
@@ -104,6 +127,12 @@ public class ManagerBBT : MonoBehaviour
             // Use the trial count from StartUI (e.g. user types 5 → 5 blocks)
             numBlocks = GameSettings.numTrialsPerGrasp;
             if (numBlocks <= 0) numBlocks = config.numberOfBlocks; // fallback
+
+            // DecoderBBT: many source blocks as decoration (score is timed, not block-limited)
+            if (GameSettings.acquisitionType == AcquisitionType.DecoderBBT)
+            {
+                numBlocks = 50;
+            }
             Debug.Log($"[BBT] Block count from StartUI: {numBlocks}");
 
             BuildBBTBox();
@@ -148,6 +177,7 @@ public class ManagerBBT : MonoBehaviour
         if (File.Exists(configPath))
         {
             config = JsonUtility.FromJson<BBTConfig>(File.ReadAllText(configPath));
+            if (config.cueGraspStartInterval <= 0) config.cueGraspStartInterval = 100;
             Debug.Log("[BBT] Config loaded");
         }
         else
@@ -157,6 +187,7 @@ public class ManagerBBT : MonoBehaviour
             {
                 sessionDuration = 60000,
                 trialsStartDelay = 3000,
+                cueGraspStartInterval = 100,
                 graspCloseDuration = 1500,
                 graspOpenDuration = 1500,
                 holdDuration = 1000,
@@ -321,11 +352,11 @@ public class ManagerBBT : MonoBehaviour
             new Vector2(305, -8), new Vector2(110, 52));
         btnExit.onClick.AddListener(OnBtnExitClick);
 
-        lblBlockCount = MakeLabel(topBar.transform, "Blocks: 0", 28,
-            new Color(1f, 0.9f, 0.2f), new Vector2(440, -8), new Vector2(200, 52));
-
         lblTimer = MakeLabel(topBar.transform, "Time: 00:00", 28,
-            new Color(0.3f, 1f, 0.3f), new Vector2(650, -8), new Vector2(250, 52));
+            new Color(0.3f, 1f, 0.3f), new Vector2(440, -8), new Vector2(200, 52));
+
+        lblBlockCount = MakeLabel(topBar.transform, "Blocks: 0", 28,
+            new Color(1f, 0.9f, 0.2f), new Vector2(650, -8), new Vector2(280, 52));
 
         lblStatus = MakeLabel(topBar.transform, "", 22,
             Color.white, new Vector2(910, -8), new Vector2(350, 52));
@@ -565,6 +596,13 @@ public class ManagerBBT : MonoBehaviour
         // ---- EVENT: session_start (same as ManagerOpenLoop) ----
         RegisterEvent("session_start");
 
+        // In DecoderBBT mode, ManagerDecoderBBT runs its own session loop
+        if (GameSettings.acquisitionType == AcquisitionType.DecoderBBT)
+        {
+            sessionRunning = false; // ManagerDecoderBBT manages session state
+            return;
+        }
+
         StartCoroutine(RunSession());
     }
 
@@ -673,15 +711,18 @@ public class ManagerBBT : MonoBehaviour
                 break;
             }
 
-            // ── PAUSE before next block ──
-            SetInstruction("Good!", Color.white);
-            yield return new WaitForSeconds(config.interTrialInterval / 1000f);
-
+            // ── PAUSE before next block (starts after hand has moved back) ──
+            SetInstruction("RILASSARE", Color.white);
             // Return hand to source for next block
             if (activeHand != null)
             {
+                Coroutine co2 = handController.ReleaseGrasp();
+                if (co2 != null) yield return co2;
+                else yield return new WaitForSeconds(0.5f);
                 yield return StartCoroutine(MoveHandArc(targetHoverPos, sourceHoverPos));
             }
+
+            yield return new WaitForSeconds(config.interTrialInterval / 1000f);
         }
 
         // ---- Check if ended early ----
@@ -724,15 +765,24 @@ public class ManagerBBT : MonoBehaviour
         }
 
         // Show instruction cue
-        SetInstruction("CLOSE HAND", new Color(1f, 0.35f, 0.3f));
+        SetInstruction("CHIUDERE LA MANO", new Color(1f, 0.35f, 0.3f));
         yield return new WaitForSeconds(0.5f);
 
         // EVENT: grasp_start(1) — identical to OpenLoop
+        // Delay grasp_start to align event marker with intended trial onset timing.
+        yield return new WaitForSeconds(config.cueGraspStartInterval / 1000f);
+
         RegisterEvent("grasp_start", 1);
         Debug.Log("[BBT] grasp_start(1) — HandClose");
 
         // Animate hand closing
-        if (handController != null)
+        if (OverrideTrialAnimation != null)
+        {
+            bool done = false;
+            yield return StartCoroutine(OverrideTrialAnimation(handController, true, () => done = true));
+            while (!done) yield return null;
+        }
+        else if (handController != null)
         {
             Coroutine co = handController.StartGrasp("HandClose");
             if (co != null) yield return co;
@@ -767,7 +817,7 @@ public class ManagerBBT : MonoBehaviour
     /// </summary>
     IEnumerator MoveBlock(GameObject block)
     {
-        SetInstruction("MOVING BLOCK...", new Color(0.3f, 0.7f, 1f));
+        SetInstruction("BLOCCO MOBILE...", new Color(0.3f, 0.7f, 1f));
 
         // Attach block to hand
         Transform originalParent = block.transform.parent;
@@ -807,17 +857,24 @@ public class ManagerBBT : MonoBehaviour
     IEnumerator TrialOpen(GameObject block)
     {
         // Show instruction cue
-        SetInstruction("OPEN HAND", new Color(0.3f, 1f, 0.4f));
+        SetInstruction("APRIRE LA MANO", new Color(0.3f, 1f, 0.4f));
         yield return new WaitForSeconds(0.5f);
 
         // EVENT: grasp_start(0) — identical to OpenLoop
+        yield return new WaitForSeconds(config.cueGraspStartInterval / 1000f);
         RegisterEvent("grasp_start", 0);
         Debug.Log("[BBT] grasp_start(0) — HandOpen");
 
         // Animate hand opening (release the block)
-        if (handController != null)
+        if (OverrideTrialAnimation != null)
         {
-            Coroutine co = handController.ReleaseGrasp();
+            bool done = false;
+            yield return StartCoroutine(OverrideTrialAnimation(handController, false, () => done = true));
+            while (!done) yield return null;
+        }
+        else if (handController != null)
+        {
+            Coroutine co = handController.StartGrasp("HandOpen");
             if (co != null) yield return co;
             else yield return new WaitForSeconds(1f);
         }
@@ -1008,7 +1065,7 @@ public class ManagerBBT : MonoBehaviour
     //  HELPERS
     // ================================================================
 
-    private void SetInstruction(string text, Color color)
+    internal void SetInstruction(string text, Color color)
     {
         if (lblInstruction != null)
         {

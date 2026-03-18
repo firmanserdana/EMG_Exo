@@ -60,6 +60,7 @@ public class BBTConfig
 {
     public int sessionDuration;         // Total session time limit [ms]
     public int trialsStartDelay;        // Delay before first trial [ms]
+    public int cueGraspStartInterval;   // Delay before registering grasp_start event [ms]
     public int graspCloseDuration;      // Duration of hand-close animation [ms]
     public int graspOpenDuration;       // Duration of hand-open animation [ms]
     public int holdDuration;            // Hold grasped block duration [ms]
@@ -88,4 +89,5 @@ public class DecoderBBTConfig
     public int expectedOpenID;           // Decoder class id for hand open
     public int minPredictionsPerPhase;   // Minimum decoder samples to score a phase
     public bool requireBothPhases;       // If true, both pickup and place must pass
+    public float phaseTimeoutSeconds;    // Seconds to wait for decoder prediction before timeout
 }

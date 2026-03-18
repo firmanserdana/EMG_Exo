@@ -3,5 +3,6 @@
   "expectedCloseID": 1,
   "expectedOpenID": 0,
   "minPredictionsPerPhase": 1,
-  "requireBothPhases": true
+  "requireBothPhases": true,
+  "phaseTimeoutSeconds": 10.0
 }

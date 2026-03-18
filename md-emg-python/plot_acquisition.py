@@ -8,8 +8,8 @@ from utils.data_utils import *
 from utils.signal_filtering import *
 
 subj_type = 'SCI' # 'healthy' or 'SCI'
-subj = 4
-session_num = 3
+subj = 7
+session_num = 4
 rest_mvc_data = False # to export the rest and MVC data file
 
 # folders definition
