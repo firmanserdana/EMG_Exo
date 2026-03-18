@@ -29,6 +29,8 @@ from pathlib import Path
 import yaml
 import sys
 import os
+import pickle
+from sklearn.preprocessing import LabelEncoder
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -326,6 +328,12 @@ def main():
                         help='Batch size')
     parser.add_argument('--output_dir', type=str, default='models-subjects',
                         help='Output directory for fine-tuned model')
+    parser.add_argument('--acquisition_type', type=str, default='open_loop',
+                        choices=['open_loop', 'closed_loop', 'both'],
+                        help='Acquisition type used for deployment naming (default: open_loop)')
+    parser.add_argument('--task', type=str, default=None,
+                        choices=['open_close', 'grasp_patterns', 'single_fingers', None],
+                        help='Override task name if pretrained metadata has no task')
     
     args = parser.parse_args()
     
@@ -414,10 +422,15 @@ To fine-tune the model, you need to:
     )
     
     # Save fine-tuned model
-    output_dir = Path(args.output_dir) / args.subj_type / f'S{args.subj}' / metadata['task']
+    task_name = args.task if args.task is not None else metadata.get('task')
+    if task_name is None:
+        raise ValueError('Task is missing in pretrained metadata. Pass --task to set it explicitly.')
+
+    output_dir = Path(args.output_dir) / args.subj_type / f'S{args.subj}' / task_name
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    model_name = f"{metadata['model_type']}_finetuned.pth"
+
+    # model_train-compatible naming used by active decoding
+    model_name = f"{metadata['model_type']}_{args.acquisition_type}.pth"
     model_path = output_dir / model_name
     
     save_dict = {
@@ -433,9 +446,26 @@ To fine-tune the model, you need to:
         'history': history,
         'best_val_acc': max(history['val_acc']),
     }
-    
-    torch.save(save_dict, model_path)
+
+    # Save state_dict only for direct compatibility with model_train.py outputs.
+    torch.save(model.state_dict(), model_path)
+
+    # Save metadata checkpoint alongside for reproducibility/debugging.
+    metadata_model_path = output_dir / f"{metadata['model_type']}_{args.acquisition_type}_metadata.pth"
+    torch.save(save_dict, metadata_model_path)
+
+    # Save matched labels encoder in the same naming convention expected by active decoding.
+    labels_encoder = LabelEncoder()
+    labels_encoder.fit(y)
+    data_subject_dir = Path('data') / args.subj_type / f'S{args.subj}'
+    data_subject_dir.mkdir(parents=True, exist_ok=True)
+    labels_encoder_path = data_subject_dir / f"{args.acquisition_type}_{task_name}_labels_encoder.pkl"
+    with open(labels_encoder_path, 'wb') as f:
+        pickle.dump({'labels_encoder': labels_encoder}, f)
+
     print(f"\n✅ Fine-tuned model saved to: {model_path}")
+    print(f"✅ Metadata checkpoint saved to: {metadata_model_path}")
+    print(f"✅ Matched labels encoder saved to: {labels_encoder_path}")
     
     # Summary
     print("\n" + "="*60)

@@ -18,6 +18,7 @@ from pathlib import Path
 import time
 import sys
 import pickle
+from sklearn.preprocessing import LabelEncoder
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -70,6 +71,7 @@ def load_pretrained_fast(pretrained_path: str, freeze_features: bool = True):
         'num_classes': num_classes,
         'norm_params': checkpoint.get('norm_params'),
         'window_ms': window_ms,
+        'task': checkpoint.get('task', 'open_close'),
         'device': device
     }
     
@@ -251,6 +253,16 @@ def main():
     parser.add_argument('--no_freeze', dest='freeze', action='store_false',
                         help='Train all layers')
     parser.add_argument('--output', type=str, help='Output model path')
+    parser.add_argument('--subj_type', type=str, default='SCI', choices=['SCI', 'healthy'],
+                        help='Subject type for compatibility export')
+    parser.add_argument('--subj', type=int, default=0,
+                        help='Subject number for compatibility export')
+    parser.add_argument('--task', type=str, default=None,
+                        choices=['open_close', 'grasp_patterns', 'single_fingers', None],
+                        help='Task name override for compatibility export')
+    parser.add_argument('--acquisition_type', type=str, default='open_loop',
+                        choices=['open_loop', 'closed_loop', 'both'],
+                        help='Acquisition type used for compatibility export naming')
     
     args = parser.parse_args()
     
@@ -347,6 +359,24 @@ def main():
     }, output_path)
     
     print(f"\n✅ Model saved to: {output_path}")
+
+    # Also export model_train-compatible artifacts for active decoding.
+    task_name = args.task if args.task is not None else metadata.get('task', 'open_close')
+    compat_models_dir = Path('models-subjects') / args.subj_type / f'S{args.subj}' / task_name
+    compat_models_dir.mkdir(parents=True, exist_ok=True)
+    compat_model_path = compat_models_dir / f"{metadata['model_type']}_{args.acquisition_type}.pth"
+    torch.save(model.state_dict(), compat_model_path)
+
+    compat_data_dir = Path('data') / args.subj_type / f'S{args.subj}'
+    compat_data_dir.mkdir(parents=True, exist_ok=True)
+    compat_encoder_path = compat_data_dir / f"{args.acquisition_type}_{task_name}_labels_encoder.pkl"
+    labels_encoder = LabelEncoder()
+    labels_encoder.fit(y)
+    with open(compat_encoder_path, 'wb') as f:
+        pickle.dump({'labels_encoder': labels_encoder}, f)
+
+    print(f"✅ Compatibility model saved to: {compat_model_path}")
+    print(f"✅ Matched labels encoder saved to: {compat_encoder_path}")
     
     # Summary
     print("\n" + "="*50)

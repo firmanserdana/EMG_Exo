@@ -1,29 +1,48 @@
-subj_identifier: 'S12' # the unique identifier for the subject
+subj_identifier: "S7" # the unique identifier for the subject
 sleeve: true # true if the EMG sleeve is used, false if bipolar electrodes are used
 
 task_open_close:
   sessions_open_loop: # valid sessions numbers in open-loop modality
-    - [0,1] # session 1
-    - [] # session 2
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
+    - 18
+    - 19
+    - 20
   sessions_closed_loop: # valid sessions numbers in closed-loop modality
-    - [2] # session 1
-    - [] # session 2
+    - [3] # session 1
+    - [14] # session 2
   invalid_sessions: [] # sessions to be ignored for data corruption or other reasons
-  model_type: 'LSTM'
+  model_type: "LSTM"
   seq_len: 5
 task_grasp_patterns:
   sessions_open_loop: [] # valid sessions numbers in open-loop modality
   sessions_closed_loop: [] # valid sessions numbers in closed-loop modality
   invalid_sessions: [] # sessions to be ignored for data corruption or other reasons
-  model_type: 'LSTM'
+  model_type: "LSTM"
   seq_len: 5
 task_single_fingers:
   sessions_open_loop: # valid sessions numbers in open-loop modality
-    - [] # session 1
-    - [] # session 2
+    - [4, 5] # session 1
+    - [8, 9, 10] # session 2
   sessions_closed_loop: # valid sessions numbers in closed-loop modality
-    - [] # session 1
-    - [] # session 2
+    - [6, 7] # session 1
+    - [11, 12] # session 2
   invalid_sessions: [] # sessions to be ignored for data corruption or other reasons
-  model_type: 'LSTM'
+  model_type: "LSTM"
   seq_len: 5

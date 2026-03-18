@@ -6,9 +6,18 @@ import glob
 import time
 import yaml
 import queue
+import sys
+import select
 import numpy as np
 from multiprocessing import Process, Queue, Value
 from threading import Thread
+
+try:
+    import termios
+    import tty
+except ImportError:
+    termios = None
+    tty = None
 
 from realtime_components.acquisition import AcquisitionLoop
 from realtime_components.events_handler import *
@@ -82,6 +91,52 @@ def SaveData(data_filename, save_queue, stop_program):
                 break
 
     print('Saving loop stopped')  
+
+
+def wait_for_enter_to_stop(prompt="Press Enter to stop the acquisition..."):
+    """Wait for Enter using robust TTY handling.
+
+    Supports both regular newline and CSI-u encoded Enter keys (e.g. '\x1b[13u').
+    """
+    print(prompt, end='', flush=True)
+
+    # Fallback to standard input if no interactive TTY is available.
+    if not sys.stdin.isatty() or termios is None or tty is None:
+        try:
+            input()
+        except (EOFError, KeyboardInterrupt):
+            pass
+        return
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    buffer = ''
+
+    try:
+        tty.setcbreak(fd)
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0.2)
+            if not ready:
+                continue
+
+            chunk = os.read(fd, 32)
+            if not chunk:
+                break
+
+            text = chunk.decode(errors='ignore')
+            buffer += text
+
+            if ('\n' in text) or ('\r' in text) or ('\x1b[13u' in buffer) or ('\x1b[27;13~' in buffer):
+                break
+
+            # Keep buffer bounded while still preserving escape sequence tails.
+            if len(buffer) > 64:
+                buffer = buffer[-64:]
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        print()
 
 # ------ MAIN ------
 if __name__ == "__main__":
@@ -311,20 +366,52 @@ if __name__ == "__main__":
     
     if decoding_active:
         p_decoding = Process(
-            target=DecodingLoop, 
+            target=DecodingLoop,
             args=(acq_params, dec_params, dec_queue, pred_control_queue, pred_save_queue, stop_program, stream_queue)
         )
-        p_control = Process(
-            target=ControlLoop, 
-            args=(
-                events_socket,
-                control_params,
-                pred_control_queue,
-                stop_program,
-                pred_esp32_queue,
-                unity_events_queue,
+
+        # Dispatch to appropriate control loop based on control_mode
+        if control_mode == 'fsm':
+            from realtime_components.fsm_control import FSMControlLoop
+            p_control = Process(
+                target=FSMControlLoop,
+                args=(
+                    events_socket,
+                    control_params,
+                    pred_control_queue,
+                    stop_program,
+                    pred_esp32_queue,
+                )
             )
-        )
+        elif control_mode == 'sci_hybrid':
+            from realtime_components.sci_control import SCIControlLoop
+            sci_config_path = os.path.join('config', 'sci_patient.yaml')
+            with open(sci_config_path, 'r') as f:
+                sci_config = yaml.safe_load(f)
+            p_control = Process(
+                target=SCIControlLoop,
+                args=(
+                    events_socket,
+                    control_params,
+                    pred_control_queue,
+                    stop_program,
+                    pred_esp32_queue,
+                    unity_events_queue,
+                    sci_config,
+                )
+            )
+        else:  # synchronized, unity_only, esp32_only
+            p_control = Process(
+                target=ControlLoop,
+                args=(
+                    events_socket,
+                    control_params,
+                    pred_control_queue,
+                    stop_program,
+                    pred_esp32_queue,
+                    unity_events_queue,
+                )
+            )
         p_pred_save = Thread(
             target=StorePredictionLoop, 
             args=(pred_save_queue, pred_save_file_name, stop_program)
@@ -364,8 +451,8 @@ if __name__ == "__main__":
 
     time.sleep(2.5) # wait for the processes to start
 
-    try:   
-        input("Press Enter to stop the acquisition...")  # wait for the user to start the acquisition
+    try:
+        wait_for_enter_to_stop("Press Enter to stop the acquisition...")
     except KeyboardInterrupt:
         print("\nStopping the program...")
     
