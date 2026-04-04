@@ -24,9 +24,19 @@ public class TcpServerManager : MonoBehaviour
         public int blockCount;
         public int graspCount;
         public float sessionTime;
+        public string outputDirectory;
+        public string sessionLabel;
+        public int sessionIndex = -1;
+        public int predictionRawID = -1;
+        public float predictionProb = -1f;
+        public float predictionTimestamp = -1f;
     }
 
     public static TcpServerManager Instance { get; private set; }
+
+    public string CurrentOutputDirectory { get; private set; }
+    public string CurrentSessionLabel { get; private set; }
+    public int? CurrentSessionIndex { get; private set; }
 
     private TcpListener server;
     private TcpClient client;
@@ -145,6 +155,18 @@ public class TcpServerManager : MonoBehaviour
             string resolvedName = !string.IsNullOrEmpty(raw.eventName) ? raw.eventName : raw.@event;
             int resolvedId = raw.eventID != 0 ? raw.eventID : raw.event_id;
 
+            if (resolvedName == "session_context")
+            {
+                CurrentOutputDirectory = raw.outputDirectory;
+                CurrentSessionLabel = raw.sessionLabel;
+                CurrentSessionIndex = raw.sessionIndex >= 0 ? raw.sessionIndex : (int?)null;
+
+                Debug.Log(
+                    "[TcpServerManager] Session context updated: " +
+                    $"folder={CurrentOutputDirectory}, label={CurrentSessionLabel}, index={CurrentSessionIndex}"
+                );
+            }
+
             return new TCPEvent
             {
                 eventName = resolvedName,
@@ -157,6 +179,12 @@ public class TcpServerManager : MonoBehaviour
                 blockCount = raw.blockCount,
                 graspCount = raw.graspCount,
                 sessionTime = raw.sessionTime,
+                outputDirectory = raw.outputDirectory,
+                sessionLabel = raw.sessionLabel,
+                sessionIndex = raw.sessionIndex,
+                predictionRawID = raw.predictionRawID,
+                predictionProb = raw.predictionProb,
+                predictionTimestamp = raw.predictionTimestamp,
             };
         }
         catch (Exception ex)

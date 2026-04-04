@@ -49,6 +49,10 @@ public class ManagerDecoderBBT : MonoBehaviour
     private bool openReceived;
 
     private string sessionId;
+    private string sessionOutputDirectory;
+    private string sessionFileStem;
+    private string decoderResultsLogPath;
+    private int decoderEventsLogged;
 
     private enum Phase
     {
@@ -79,14 +83,13 @@ public class ManagerDecoderBBT : MonoBehaviour
     {
         LoadConfig();
         bbt = ManagerBBT.Instance;
-        sessionId = $"{DateTime.UtcNow:yyyyMMdd_HHmmss}_{UnityEngine.Random.Range(1000, 9999)}";
 
         ManagerBBT.OnLocalEventRegistered += HandleBbtEvent;
 
         if (TcpServerManager.Instance != null)
             TcpServerManager.Instance.OnMessageReceived += HandleTcpEvent;
 
-        Debug.Log($"[DecoderBBT] Initialized — sessionId={sessionId}, " +
+        Debug.Log($"[DecoderBBT] Initialized — " +
                   $"timeout={cfg.phaseTimeoutSeconds}s, duration={cfg.sessionDurationSeconds}s");
     }
 
@@ -147,6 +150,8 @@ public class ManagerDecoderBBT : MonoBehaviour
     private void ResetState()
     {
         sessionRunning = false;
+        sessionStartTime = 0f;
+        sessionCoroutine = null;
         blocksSucceeded = 0;
         blocksDroppedDuringMove = 0;
         blocksTimedOut = 0;
@@ -155,10 +160,98 @@ public class ManagerDecoderBBT : MonoBehaviour
         closeReceived = false;
         openReceived = false;
         currentPhase = Phase.Idle;
+        sessionId = null;
+        sessionOutputDirectory = null;
+        sessionFileStem = null;
+        decoderResultsLogPath = null;
+        decoderEventsLogged = 0;
 
         if (carriedBlock != null) { Destroy(carriedBlock); carriedBlock = null; }
         foreach (var b in placedBlocks) { if (b != null) Destroy(b); }
         placedBlocks.Clear();
+    }
+
+    private void PrepareSessionPersistence()
+    {
+        sessionId = $"{DateTime.UtcNow:yyyyMMdd_HHmmss}_{UnityEngine.Random.Range(1000, 9999)}";
+
+        string fileLabel = "decoder_bbt";
+        string folder = Path.Combine(Application.persistentDataPath, "decoder_bbt");
+
+        if (TcpServerManager.Instance != null)
+        {
+            if (!string.IsNullOrWhiteSpace(TcpServerManager.Instance.CurrentSessionLabel))
+                fileLabel = TcpServerManager.Instance.CurrentSessionLabel;
+
+            if (!string.IsNullOrWhiteSpace(TcpServerManager.Instance.CurrentOutputDirectory))
+                folder = TcpServerManager.Instance.CurrentOutputDirectory;
+        }
+
+        Directory.CreateDirectory(folder);
+
+        sessionOutputDirectory = folder;
+        sessionFileStem = $"{SanitizeFileStem(fileLabel)}_decoder_bbt_{sessionId}";
+        decoderResultsLogPath = Path.Combine(sessionOutputDirectory, $"{sessionFileStem}_decoder_results.jsonl");
+        decoderEventsLogged = 0;
+
+        Debug.Log(
+            "[DecoderBBT] Session persistence ready: " +
+            $"folder={sessionOutputDirectory}, stem={sessionFileStem}"
+        );
+    }
+
+    private static string SanitizeFileStem(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "decoder_bbt";
+
+        foreach (char invalidChar in Path.GetInvalidFileNameChars())
+            value = value.Replace(invalidChar, '_');
+
+        return value.Replace(' ', '_');
+    }
+
+    private void AppendDecoderLog(
+        string entryType,
+        string detail,
+        int predictedUnityEventId = -1,
+        int predictedRawId = -1,
+        float predictionProb = -1f,
+        float predictionTimestamp = -1f)
+    {
+        if (string.IsNullOrWhiteSpace(decoderResultsLogPath))
+            PrepareSessionPersistence();
+
+        var entry = new DecoderBBTLogEntry
+        {
+            sessionId = sessionId,
+            sessionLabel = TcpServerManager.Instance != null ? TcpServerManager.Instance.CurrentSessionLabel : string.Empty,
+            timestamp = DateTime.UtcNow.ToString("o"),
+            elapsedSeconds = Mathf.Max(0f, Time.time - sessionStartTime),
+            entryType = entryType,
+            detail = detail,
+            phase = currentPhase.ToString(),
+            predictedUnityEventId = predictedUnityEventId,
+            predictedRawId = predictedRawId,
+            predictionProb = predictionProb,
+            predictionTimestamp = predictionTimestamp,
+            blocksMovedSuccessfully = blocksSucceeded,
+            blocksSucceeded = blocksSucceeded,
+            blocksDropped = blocksDroppedDuringMove,
+            blocksDroppedDuringMove = blocksDroppedDuringMove,
+            blocksTimedOut = blocksTimedOut,
+            totalAttempts = totalAttempts
+        };
+
+        try
+        {
+            File.AppendAllText(decoderResultsLogPath, JsonUtility.ToJson(entry) + Environment.NewLine);
+            decoderEventsLogged++;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[DecoderBBT] Failed to append decoder log: {e.Message}");
+        }
     }
 
     // ================================================================
@@ -170,8 +263,10 @@ public class ManagerDecoderBBT : MonoBehaviour
         if (eventName == "session_start")
         {
             ResetState();
+            PrepareSessionPersistence();
             sessionRunning = true;
             sessionStartTime = Time.time;
+            AppendDecoderLog("session_start", "decoder_bbt_started");
             sessionCoroutine = StartCoroutine(DecoderSessionLoop());
         }
         else if (eventName == "session_stop" || eventName == "session_end")
@@ -194,6 +289,7 @@ public class ManagerDecoderBBT : MonoBehaviour
         if (eventData.eventName != "grasp_decoded") return;
 
         int predicted = eventData.eventID;
+        string decision = "ignored";
 
         switch (currentPhase)
         {
@@ -201,6 +297,7 @@ public class ManagerDecoderBBT : MonoBehaviour
                 if (predicted == cfg.expectedCloseID)
                 {
                     closeReceived = true;
+                    decision = "pickup_close_detected";
                     Debug.Log("[DecoderBBT] CLOSE prediction received → pickup");
                 }
                 break;
@@ -209,6 +306,7 @@ public class ManagerDecoderBBT : MonoBehaviour
                 if (predicted == cfg.expectedOpenID)
                 {
                     openReceived = true;
+                    decision = "drop_open_detected";
                     Debug.Log("[DecoderBBT] OPEN prediction during move → DROP!");
                 }
                 break;
@@ -217,10 +315,20 @@ public class ManagerDecoderBBT : MonoBehaviour
                 if (predicted == cfg.expectedOpenID)
                 {
                     openReceived = true;
+                    decision = "place_open_detected";
                     Debug.Log("[DecoderBBT] OPEN prediction received → place");
                 }
                 break;
         }
+
+        AppendDecoderLog(
+            "decoder_result",
+            decision,
+            predictedUnityEventId: predicted,
+            predictedRawId: eventData.predictionRawID,
+            predictionProb: eventData.predictionProb,
+            predictionTimestamp: eventData.predictionTimestamp
+        );
     }
 
     // ================================================================
@@ -318,6 +426,7 @@ public class ManagerDecoderBBT : MonoBehaviour
             {
                 // ---- BLOCK DROPPED DURING MOVE ----
                 blocksDroppedDuringMove++;
+                AppendDecoderLog("attempt_outcome", "block_dropped_during_move");
                 Debug.Log($"[DecoderBBT] Block DROPPED during move (total drops: {blocksDroppedDuringMove})");
 
                 // Animate hand open
@@ -386,6 +495,7 @@ public class ManagerDecoderBBT : MonoBehaviour
                 RegisterEvent("grasp_released");
                 PlaceBlockAtTarget();
                 blocksSucceeded++;
+                AppendDecoderLog("attempt_outcome", "block_moved_successfully");
                 Debug.Log($"[DecoderBBT] Block PLACED (total: {blocksSucceeded})");
                 bbt.SetInstruction("SUCCESS!", new Color(0.3f, 1f, 0.4f));
             }
@@ -393,6 +503,7 @@ public class ManagerDecoderBBT : MonoBehaviour
             {
                 // ---- TIMEOUT at target ----
                 blocksTimedOut++;
+                AppendDecoderLog("attempt_outcome", "block_timeout_at_target");
                 Debug.Log($"[DecoderBBT] Block TIMEOUT at target (total timeouts: {blocksTimedOut})");
 
                 // Force hand open for next attempt
@@ -626,6 +737,7 @@ public class ManagerDecoderBBT : MonoBehaviour
             new Color(1f, 0.9f, 0.2f));
 
         UpdateScoreDisplay();
+        AppendDecoderLog("session_end", reason);
         PersistResult(reason, elapsed);
 
         RegisterEvent("session_end");
@@ -637,22 +749,32 @@ public class ManagerDecoderBBT : MonoBehaviour
 
     private void PersistResult(string reason, float elapsedSeconds)
     {
+        if (string.IsNullOrWhiteSpace(sessionOutputDirectory))
+            PrepareSessionPersistence();
+
         var payload = new DecoderBBTResult
         {
             sessionId = sessionId,
+            sessionLabel = TcpServerManager.Instance != null ? TcpServerManager.Instance.CurrentSessionLabel : string.Empty,
             reason = reason,
             timestamp = DateTime.UtcNow.ToString("o"),
+            outputDirectory = sessionOutputDirectory,
             sessionDurationSeconds = cfg.sessionDurationSeconds,
             elapsedSeconds = elapsedSeconds,
+            blocksMovedSuccessfully = blocksSucceeded,
             blocksSucceeded = blocksSucceeded,
+            blocksDropped = blocksDroppedDuringMove,
             blocksDroppedDuringMove = blocksDroppedDuringMove,
             blocksTimedOut = blocksTimedOut,
-            totalAttempts = totalAttempts
+            totalAttempts = totalAttempts,
+            decoderEventsLogged = decoderEventsLogged,
+            decoderResultsLogFile = string.IsNullOrWhiteSpace(decoderResultsLogPath)
+                ? string.Empty
+                : Path.GetFileName(decoderResultsLogPath)
         };
 
-        string folder = Path.Combine(Application.persistentDataPath, "decoder_bbt");
-        Directory.CreateDirectory(folder);
-        string path = Path.Combine(folder, $"decoder_bbt_{sessionId}.json");
+        Directory.CreateDirectory(sessionOutputDirectory);
+        string path = Path.Combine(sessionOutputDirectory, $"{sessionFileStem}_summary.json");
         File.WriteAllText(path, JsonUtility.ToJson(payload, true));
         Debug.Log($"[DecoderBBT] Results saved to {path}");
     }
@@ -665,11 +787,39 @@ public class ManagerDecoderBBT : MonoBehaviour
     private class DecoderBBTResult
     {
         public string sessionId;
+        public string sessionLabel;
         public string reason;
         public string timestamp;
+        public string outputDirectory;
         public int sessionDurationSeconds;
         public float elapsedSeconds;
+        public int blocksMovedSuccessfully;
         public int blocksSucceeded;
+        public int blocksDropped;
+        public int blocksDroppedDuringMove;
+        public int blocksTimedOut;
+        public int totalAttempts;
+        public int decoderEventsLogged;
+        public string decoderResultsLogFile;
+    }
+
+    [Serializable]
+    private class DecoderBBTLogEntry
+    {
+        public string sessionId;
+        public string sessionLabel;
+        public string timestamp;
+        public float elapsedSeconds;
+        public string entryType;
+        public string detail;
+        public string phase;
+        public int predictedUnityEventId;
+        public int predictedRawId;
+        public float predictionProb;
+        public float predictionTimestamp;
+        public int blocksMovedSuccessfully;
+        public int blocksSucceeded;
+        public int blocksDropped;
         public int blocksDroppedDuringMove;
         public int blocksTimedOut;
         public int totalAttempts;

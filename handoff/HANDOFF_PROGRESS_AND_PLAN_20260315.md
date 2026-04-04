@@ -69,3 +69,34 @@ Workaround used here:
 - SCI evaluation policy: include open-loop + closed-loop sessions for S3/S4.
 - Unity scope: dedicated Decoder-BBT mode/scene with moved/dropped block metrics and phase checks.
 - Main risk recognized: full HPO wall-clock on local hardware is very long; remote better GPU recommended.
+
+## Update 2026-04-04
+
+Additional Decoder-BBT logging and transfer work was completed after the original handoff snapshot.
+
+### Added session-side Decoder-BBT logging
+
+- Python now sends Unity a `session_context` message before acquisition starts so Unity knows the active EMG save folder.
+- Unity now stores Decoder-BBT artifacts in the EMG session output directory when that context is available.
+- Decoder-BBT now records:
+  - moved successfully count
+  - dropped count
+  - timeout count
+  - total attempts
+  - per-decision decoder metadata
+
+### Added richer decoder payloads
+
+- Python `grasp_decoded` events sent to Unity now include:
+  - raw decoder label
+  - prediction confidence
+  - prediction timestamp
+
+### New output artifacts
+
+- Decoder-BBT summary JSON written beside EMG session files.
+- Decoder-BBT JSONL event log written beside EMG session files.
+
+### Detailed handoff doc
+
+- See `handoff/DECODER_BBT_SESSION_LOGGING_TRANSFER_20260404.md` for the exact files changed and what to move to another PC.

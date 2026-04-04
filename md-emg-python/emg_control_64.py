@@ -4,6 +4,7 @@ import platform
 import re
 import glob
 import time
+import json
 import yaml
 import queue
 import sys
@@ -138,6 +139,36 @@ def wait_for_enter_to_stop(prompt="Press Enter to stop the acquisition..."):
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         print()
 
+
+def SendUnitySessionContext(
+    events_socket,
+    output_directory,
+    session_label,
+    session_index,
+    subject_id,
+    task_name,
+    acquisition_type,
+):
+    """Publish the current save location so Unity-side logs land beside EMG files."""
+    payload = {
+        'eventName': 'session_context',
+        'eventID': int(session_index),
+        'outputDirectory': os.path.abspath(output_directory),
+        'sessionLabel': session_label,
+        'subjectID': subject_id,
+        'taskName': task_name,
+        'acquisitionType': acquisition_type,
+    }
+
+    try:
+        events_socket.sendall((json.dumps(payload) + '\n').encode('utf-8'))
+        print(
+            'Sent Unity session context: '
+            f"folder={payload['outputDirectory']}, label={payload['sessionLabel']}"
+        )
+    except Exception as exc:
+        print(f'Warning: failed to send Unity session context: {exc}')
+
 # ------ MAIN ------
 if __name__ == "__main__":
     # Parse command line arguments
@@ -208,10 +239,16 @@ if __name__ == "__main__":
         data_filename = os.path.join(data_raw_folder, f'session_{session_num:02d}.npy')
         events_filename = os.path.join(data_raw_folder, f'session_{session_num:02d}_events.pkl')
         pred_save_file_name = os.path.join(data_raw_folder, f'session_{session_num:02d}_predictions.pkl')
+        session_index = session_num
+        session_label = f'session_{session_num:02d}'
+        session_output_directory = data_raw_folder
     else:
         data_filename = os.path.join(data_mvc_folder, 'mvc.npy')
         events_filename = os.path.join(data_mvc_folder, 'mvc_events.pkl')
         pred_save_file_name = os.path.join(data_mvc_folder, 'mvc_predictions.pkl')
+        session_index = -1
+        session_label = 'mvc'
+        session_output_directory = data_mvc_folder
     
     mvc_file = os.path.join(data_mvc_folder, 'dataset_mvc.pkl')
 
@@ -331,6 +368,16 @@ if __name__ == "__main__":
     if events_socket is None:
         print("Failed to connect to the events server. Exiting the program.")
         exit()
+
+    SendUnitySessionContext(
+        events_socket=events_socket,
+        output_directory=session_output_directory,
+        session_label=session_label,
+        session_index=session_index,
+        subject_id=subj_id,
+        task_name=task,
+        acquisition_type=acquisition_type,
+    )
 
     # if streaming is enabled -> opening the streaming socket
     if streaming_active:
