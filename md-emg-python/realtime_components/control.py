@@ -175,6 +175,16 @@ def ControlLoop(
             print(f"✗ Error sending to Unity: {e}")
             performance_stats['errors_count'] += 1
 
+    def build_unity_decoder_event(unity_event_id, raw_prediction, prediction_prob, prediction_timestamp):
+        """Build a decoder payload that Unity can persist beside the EMG session outputs."""
+        return {
+            "eventName": "grasp_decoded",
+            "eventID": int(unity_event_id),
+            "predictionRawID": int(raw_prediction),
+            "predictionProb": float(prediction_prob),
+            "predictionTimestamp": float(prediction_timestamp),
+        }
+
     def send_rest_to_esp32(reason: str = ""):
         """Helper to send rest (gesture 0) command to the ESP32 controller."""
         nonlocal last_sent_gesture
@@ -237,7 +247,8 @@ def ControlLoop(
 
         if data is not None:
             pred = data[0] # prediction from the model
-            pred_prob = data[1] # prediction probability            
+            pred_prob = data[1] # prediction probability
+            prediction_timestamp = data[2] if len(data) > 2 else rcv_time
             performance_stats['predictions_processed'] += 1
             
             # Add prediction confidence threshold and timing checks
@@ -348,10 +359,12 @@ def ControlLoop(
                     if len(last_predictions) == num_consec_pred and all(p == last_predictions[0] for p in last_predictions):
                         # Send to Unity only if not in esp32_only mode
                         if control_mode != 'esp32_only' and unity_event_id is not None:
-                            event = {
-                                "eventName": "grasp_decoded",
-                                "eventID": int(unity_event_id),
-                            }
+                            event = build_unity_decoder_event(
+                                unity_event_id,
+                                pred,
+                                pred_prob,
+                                prediction_timestamp,
+                            )
 
                             # Send to Unity in parallel (non-blocking)
                             unity_thread = threading.Thread(
@@ -364,10 +377,12 @@ def ControlLoop(
                 else:
                     # Send to Unity only if not in esp32_only mode
                     if control_mode != 'esp32_only' and unity_event_id is not None:
-                        event = {
-                            "eventName": "grasp_decoded",
-                            "eventID": int(unity_event_id),
-                        }
+                        event = build_unity_decoder_event(
+                            unity_event_id,
+                            pred,
+                            pred_prob,
+                            prediction_timestamp,
+                        )
 
                         # Send to Unity in parallel (non-blocking)
                         unity_thread = threading.Thread(

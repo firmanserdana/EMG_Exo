@@ -17,6 +17,16 @@ public class TCPEvent
     public int blockCount;        // Number of blocks transferred
     public int graspCount;        // Number of grasp-release cycles
     public float sessionTime;     // Time since session start
+
+    // Session persistence context
+    public string outputDirectory;
+    public string sessionLabel;
+    public int sessionIndex;
+
+    // Decoder metadata for session-side logging
+    public int predictionRawID = -1;
+    public float predictionProb = -1f;
+    public float predictionTimestamp = -1f;
 }
 
 [Serializable]
