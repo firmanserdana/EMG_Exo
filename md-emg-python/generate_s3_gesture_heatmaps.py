@@ -40,6 +40,52 @@ def load_session(session_file: Path) -> np.ndarray:
     return np.concatenate(arrays, axis=0)
 
 
+def load_predictions(session_idx: int):
+    """Load all prediction chunks for a session into one ndarray."""
+    pred_file = DATA_DIR / f'session_{session_idx:02d}_predictions.pkl'
+    if not pred_file.exists():
+        return None
+
+    chunks = []
+    with open(pred_file, 'rb') as f:
+        while True:
+            try:
+                chunk = np.asarray(pickle.load(f))
+            except EOFError:
+                break
+
+            if chunk.size == 0:
+                continue
+            if chunk.ndim == 1:
+                chunk = np.atleast_2d(chunk)
+            chunks.append(chunk)
+
+    if not chunks:
+        return np.empty((0, 2), dtype=float)
+
+    return np.concatenate(chunks, axis=0)
+
+
+def extract_prediction_classes(preds) -> np.ndarray:
+    """Extract class ids from either class-score rows or (label, confidence) rows."""
+    preds_arr = np.asarray(preds)
+    if preds_arr.size == 0:
+        return np.array([], dtype=int)
+
+    if preds_arr.ndim == 1:
+        return preds_arr.astype(int)
+
+    if preds_arr.shape[1] >= 2:
+        pred_labels = preds_arr[:, 0]
+        pred_conf = preds_arr[:, 1]
+        labels_integer_like = np.all(np.abs(pred_labels - np.round(pred_labels)) < 1e-6)
+        conf_probability_like = np.all((pred_conf >= 0.0) & (pred_conf <= 1.0))
+        if labels_integer_like and conf_probability_like:
+            return np.round(pred_labels).astype(int)
+
+    return np.argmax(preds_arr, axis=1).astype(int)
+
+
 def compute_rms_per_channel(data: np.ndarray, window_ms: int = 100,
                             fs_hz: float = DEFAULT_FS_HZ) -> np.ndarray:
     """Compute mean RMS per channel over the entire segment."""
@@ -115,15 +161,19 @@ def extract_segments_from_predictions(session_idx: int):
     if not pred_file.exists() or not npy_file.exists():
         return {}
 
-    with open(pred_file, 'rb') as f:
-        preds = pickle.load(f)
+    preds = load_predictions(session_idx)
+    if preds is None:
+        return {}
 
     data = load_session(npy_file)
     emg = data[:, :NUM_CHANNELS]
 
-    n_preds = preds.shape[0]
+    pred_classes = extract_prediction_classes(preds)
+    n_preds = pred_classes.shape[0]
+    if n_preds == 0:
+        return {}
+
     samples_per_pred = emg.shape[0] // n_preds
-    pred_classes = np.argmax(preds, axis=1)
 
     segments = {}
     for i, cls in enumerate(pred_classes):

@@ -291,6 +291,41 @@ def build_paired_lists(active_map, other_map):
     return active_vals, other_vals, shared
 
 
+def compute_requested_reduction(values_a, values_b, cond_a, cond_b, use_median=True):
+    """Compute requested pairwise % reduction for specific condition pairs.
+
+    Requested formulations:
+    - (No glove - Active glove) / No glove
+    - (Passive glove - Active glove) / Passive glove
+    - (No glove - Passive glove) / No glove
+
+    Fallback for any other pair:
+    - (cond_a - cond_b) / cond_a
+    """
+    agg = np.median if use_median else np.mean
+    val_a = float(agg(values_a))
+    val_b = float(agg(values_b))
+
+    pair = {cond_a, cond_b}
+    if pair == {'No glove', 'Active glove'}:
+        baseline = 'No glove'
+        target = 'Active glove'
+    elif pair == {'Passive glove', 'Active glove'}:
+        baseline = 'Passive glove'
+        target = 'Active glove'
+    elif pair == {'No glove', 'Passive glove'}:
+        baseline = 'No glove'
+        target = 'Passive glove'
+    else:
+        baseline = cond_a
+        target = cond_b
+
+    baseline_val = val_a if cond_a == baseline else val_b
+    target_val = val_a if cond_a == target else val_b
+
+    return ((baseline_val - target_val) / baseline_val) * 100 if baseline_val != 0 else 0.0
+
+
 def write_median_aggregated_tests(f, condition_subject_medians, comparison_pairs, CONDITIONS, one_tailed=True, direction='less'):
     """Write a section showing statistical tests run on subject-level MEDIANS.
     
@@ -956,69 +991,80 @@ def generate_duration_statistics():
             
             # One-tailed tests (Active > Other for duration - active tasks take longer)
             f.write("### One-Tailed Tests: Active glove > Other (duration expected longer with assistance)\n\n")
-            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | Supported? |\n")
-            f.write("|------------|-------------------|--------|-----------|---|--------|---|--------------|------------|\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | % Reduction (median) | Supported? |\n")
+            f.write("|------------|-------------------|--------|-----------|---|--------|---|--------------|----------------------|------------|\n")
 
-            for other_cond in ['Passive glove', 'No glove']:
-                if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+            one_tailed_specs = [
+                ('Active glove', 'Passive glove', 'greater'),
+                ('Active glove', 'No glove', 'greater'),
+                ('Passive glove', 'No glove', 'greater')
+            ]
+
+            for cond_a, cond_b, alternative in one_tailed_specs:
+                if cond_a not in subject_means or obj_id not in subject_means[cond_a] or \
+                   cond_b not in subject_means or obj_id not in subject_means[cond_b]:
+                    f.write(f"| {cond_a} vs {cond_b} | 0 | - | - | - | - | - | - | - |\n")
                     continue
 
-                other_map = subject_means[other_cond][obj_id]
-                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
-
+                vals_a, vals_b, shared = build_paired_lists(subject_means[cond_a][obj_id], subject_means[cond_b][obj_id])
                 if len(shared) == 0:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    f.write(f"| {cond_a} vs {cond_b} | 0 | - | - | - | - | - | - | - |\n")
                     continue
 
-                # One-tailed: Active > Other (greater)
-                t_stat, p_two = stats.ttest_ind(active_vals, other_vals, equal_var=False)
-                p_welch_gt = p_two / 2 if t_stat > 0 else 1 - (p_two / 2)
-                
-                u_stat, _ = stats.mannwhitneyu(active_vals, other_vals, alternative='two-sided')
-                _, p_mw_gt = stats.mannwhitneyu(active_vals, other_vals, alternative='greater')
-                
+                t_stat, p_two = stats.ttest_ind(vals_a, vals_b, equal_var=False)
+                p_welch_one = p_two / 2 if t_stat > 0 else 1 - (p_two / 2)
+
+                u_stat, _ = stats.mannwhitneyu(vals_a, vals_b, alternative='two-sided')
+                _, p_mw_one = stats.mannwhitneyu(vals_a, vals_b, alternative=alternative)
+
                 w_stat = np.nan
-                p_wilcoxon_gt = np.nan
+                p_wilcoxon_one = np.nan
                 try:
-                    w_stat, p_wilcoxon_gt = stats.wilcoxon(active_vals, other_vals, alternative='greater')
+                    w_stat, p_wilcoxon_one = stats.wilcoxon(vals_a, vals_b, alternative=alternative)
                 except ValueError:
                     pass
-                
-                mean_active = np.mean(active_vals)
-                mean_other = np.mean(other_vals)
-                supported = (mean_active > mean_other) and (p_wilcoxon_gt < 0.05 if not np.isnan(p_wilcoxon_gt) else False)
+
+                mean_a = np.mean(vals_a)
+                mean_b = np.mean(vals_b)
+                median_reduction = compute_requested_reduction(vals_a, vals_b, cond_a, cond_b, use_median=True)
+                supported = (mean_a > mean_b) and (p_wilcoxon_one < 0.05 if not np.isnan(p_wilcoxon_one) else False)
                 support_text = "✓ YES" if supported else "✗ NO"
 
-                f.write(f"| Active vs {other_cond} | {len(shared)} | {t_stat:.3f} | {format_pvalue(p_welch_gt)} | "
-                        f"{u_stat:.1f} | {format_pvalue(p_mw_gt)} | "
-                        f"{w_stat:.1f} | {format_pvalue(p_wilcoxon_gt)} | **{support_text}** |\n")
+                f.write(f"| {cond_a} vs {cond_b} | {len(shared)} | {t_stat:.3f} | {format_pvalue(p_welch_one)} | "
+                        f"{u_stat:.1f} | {format_pvalue(p_mw_one)} | "
+                        f"{w_stat:.1f} | {format_pvalue(p_wilcoxon_one)} | {median_reduction:+.1f}% | **{support_text}** |\n")
 
             f.write("\n")
             
             # Two-tailed tests (any difference)
             f.write("### Two-Tailed Tests: Any significant difference\n\n")
-            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | Significant? |\n")
-            f.write("|------------|-------------------|--------|-----------|---|--------|---|--------------|-------------|\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch) | U | p (MW) | W | p (Wilcoxon) | % Reduction (median) | Significant? |\n")
+            f.write("|------------|-------------------|--------|-----------|---|--------|---|--------------|----------------------|-------------|\n")
 
-            for other_cond in ['Passive glove', 'No glove']:
-                if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+            two_tailed_specs = [
+                ('Active glove', 'Passive glove'),
+                ('Active glove', 'No glove'),
+                ('Passive glove', 'No glove')
+            ]
+
+            for cond_a, cond_b in two_tailed_specs:
+                if cond_a not in subject_means or obj_id not in subject_means[cond_a] or \
+                   cond_b not in subject_means or obj_id not in subject_means[cond_b]:
+                    f.write(f"| {cond_a} vs {cond_b} | 0 | - | - | - | - | - | - | - |\n")
                     continue
 
-                other_map = subject_means[other_cond][obj_id]
-                active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
-
+                vals_a, vals_b, shared = build_paired_lists(subject_means[cond_a][obj_id], subject_means[cond_b][obj_id])
                 if len(shared) == 0:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - |\n")
+                    f.write(f"| {cond_a} vs {cond_b} | 0 | - | - | - | - | - | - | - |\n")
                     continue
 
-                results = test_pairwise_comparison(active_vals, other_vals, 'Active glove', other_cond)
+                results = test_pairwise_comparison(vals_a, vals_b, cond_a, cond_b)
+                median_reduction = compute_requested_reduction(vals_a, vals_b, cond_a, cond_b, use_median=True)
                 sig_text = "✓ YES" if results['is_significant_wilcoxon'] else "✗ NO"
 
-                f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
+                f.write(f"| {cond_a} vs {cond_b} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
                         f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
-                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | **{sig_text}** |\n")
+                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | {median_reduction:+.1f}% | **{sig_text}** |\n")
 
             f.write("\n")
             
@@ -1131,28 +1177,82 @@ def generate_mvc_statistics():
 
             active_map = subject_means['Active glove'][obj_id]
             f.write("### Hypothesis: Active glove < Other\n\n")
-            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | % Reduction | Supported? (Wilcoxon) |\n")
+            f.write("| Comparison | Subjects (paired) | t-stat | p (Welch, one-tail) | U | p (MW, one-tail) | W | p (Wilcoxon, one-tail) | % Reduction (median) | Supported? (Wilcoxon) |\n")
             f.write("|------------|-------------------|--------|---------------------|---|-------------------|---|------------------------|-------------|------------------------|\n")
+
+            one_tailed_specs = [
+                ('Active glove', 'Passive glove', 'less'),
+                ('Active glove', 'No glove', 'less'),
+                ('Passive glove', 'No glove', 'less')
+            ]
+
+            for cond_a, cond_b, alternative in one_tailed_specs:
+                if cond_a not in subject_means or obj_id not in subject_means[cond_a] or \
+                   cond_b not in subject_means or obj_id not in subject_means[cond_b]:
+                    f.write(f"| {cond_a} vs {cond_b} | 0 | - | - | - | - | - | - | - | - |\n")
+                    continue
+
+                vals_a, vals_b, shared = build_paired_lists(subject_means[cond_a][obj_id], subject_means[cond_b][obj_id])
+                if len(shared) == 0:
+                    f.write(f"| {cond_a} vs {cond_b} | 0 | - | - | - | - | - | - | - | - |\n")
+                    continue
+
+                t_stat, p_two = stats.ttest_ind(vals_a, vals_b, equal_var=False)
+                p_welch_one = p_two / 2 if t_stat < 0 else 1 - (p_two / 2)
+
+                u_stat, _ = stats.mannwhitneyu(vals_a, vals_b, alternative='two-sided')
+                _, p_mw_one = stats.mannwhitneyu(vals_a, vals_b, alternative=alternative)
+
+                w_stat = np.nan
+                p_wilcoxon_one = np.nan
+                try:
+                    w_stat, p_wilcoxon_one = stats.wilcoxon(vals_a, vals_b, alternative=alternative)
+                except ValueError:
+                    pass
+
+                mean_a = np.mean(vals_a)
+                mean_b = np.mean(vals_b)
+                reduction = compute_requested_reduction(vals_a, vals_b, cond_a, cond_b, use_median=True)
+                support_text = "✓ YES" if ((mean_a < mean_b) and (p_wilcoxon_one < 0.05 if not np.isnan(p_wilcoxon_one) else False)) else "✗ NO"
+
+                f.write(f"| {cond_a} vs {cond_b} | {len(shared)} | {t_stat:.3f} | {format_pvalue(p_welch_one)} | "
+                        f"{u_stat:.1f} | {format_pvalue(p_mw_one)} | "
+                        f"{w_stat:.1f} | {format_pvalue(p_wilcoxon_one)} | "
+                        f"{reduction:+.1f}% | **{support_text}** |\n")
+
+            f.write("\n")
+
+            # Median reduction table using mean-aggregated subject values
+            f.write("### Median % Reduction (Mean-Aggregated Subject Values)\n\n")
+            f.write("Formulas: ((No glove-Active glove)/No glove), ((Passive glove-Active glove)/Passive glove), ((No glove-Passive glove)/No glove).\n\n")
+            f.write("| Comparison (cond1 -> cond2) | Median cond1 | Median cond2 | % Reduction |\n")
+            f.write("|-----------------------------|--------------|--------------|-------------|\n")
 
             for other_cond in ['Passive glove', 'No glove']:
                 if other_cond not in subject_means or obj_id not in subject_means[other_cond]:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - | - |\n")
+                    f.write(f"| {other_cond} -> Active glove | - | - | - |\n")
                     continue
 
                 other_map = subject_means[other_cond][obj_id]
                 active_vals, other_vals, shared = build_paired_lists(active_map, other_map)
-
                 if len(shared) == 0:
-                    f.write(f"| Active vs {other_cond} | 0 | - | - | - | - | - | - | - | - |\n")
+                    f.write(f"| {other_cond} -> Active glove | - | - | - |\n")
                     continue
 
-                results = test_hypothesis_comprehensive(active_vals, other_vals, other_cond)
-                support_text = "✓ YES" if results['hypothesis_supported_wilcoxon'] else "✗ NO"
+                median_active = np.median(active_vals)
+                median_other = np.median(other_vals)
+                reduction = ((median_other - median_active) / median_other) * 100 if median_other != 0 else 0
+                f.write(f"| {other_cond} -> Active glove | {median_other:.3f} | {median_active:.3f} | {reduction:+.1f}% |\n")
 
-                f.write(f"| Active vs {other_cond} | {len(shared)} | {results['t_stat']:.3f} | {format_pvalue(results['p_welch'])} | "
-                        f"{results['u_stat']:.1f} | {format_pvalue(results['p_mannwhitney'])} | "
-                        f"{results['w_stat']:.1f} | {format_pvalue(results['p_wilcoxon'])} | "
-                        f"{results['percent_reduction']:+.1f}% | **{support_text}** |\n")
+            # Requested additional reduction: No glove -> Passive glove
+            if 'No glove' in subject_means and obj_id in subject_means['No glove'] and \
+               'Passive glove' in subject_means and obj_id in subject_means['Passive glove']:
+                no_vals, passive_vals, shared = build_paired_lists(subject_means['No glove'][obj_id], subject_means['Passive glove'][obj_id])
+                if len(shared) > 0:
+                    median_no = np.median(no_vals)
+                    median_passive = np.median(passive_vals)
+                    reduction_np = ((median_no - median_passive) / median_no) * 100 if median_no != 0 else 0
+                    f.write(f"| No glove -> Passive glove | {median_no:.3f} | {median_passive:.3f} | {reduction_np:+.1f}% |\n")
 
             f.write("\n")
 

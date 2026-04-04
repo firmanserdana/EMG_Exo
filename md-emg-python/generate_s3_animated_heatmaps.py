@@ -66,13 +66,54 @@ def load_events(session_idx: int):
 
 
 def load_predictions(session_idx: int):
-    """Load predictions file if it exists. Returns ndarray (n_preds, n_classes) or None."""
+    """Load all prediction chunks for a session.
+
+    Prediction files are saved as multiple pickle chunks. Returns one
+    concatenated ndarray, an empty ndarray if no predictions are stored,
+    or None if the file is missing.
+    """
     pred_file = DATA_DIR / f'session_{session_idx:02d}_predictions.pkl'
     if not pred_file.exists():
         return None
+
+    chunks = []
     with open(pred_file, 'rb') as f:
-        preds = pickle.load(f)
-    return preds
+        while True:
+            try:
+                chunk = np.asarray(pickle.load(f))
+            except EOFError:
+                break
+
+            if chunk.size == 0:
+                continue
+            if chunk.ndim == 1:
+                chunk = np.atleast_2d(chunk)
+            chunks.append(chunk)
+
+    if not chunks:
+        return np.empty((0, 2), dtype=float)
+
+    return np.concatenate(chunks, axis=0)
+
+
+def extract_prediction_classes(preds) -> np.ndarray:
+    """Extract class ids from either class-score rows or (label, confidence) rows."""
+    preds_arr = np.asarray(preds)
+    if preds_arr.size == 0:
+        return np.array([], dtype=int)
+
+    if preds_arr.ndim == 1:
+        return preds_arr.astype(int)
+
+    if preds_arr.shape[1] >= 2:
+        pred_labels = preds_arr[:, 0]
+        pred_conf = preds_arr[:, 1]
+        labels_integer_like = np.all(np.abs(pred_labels - np.round(pred_labels)) < 1e-6)
+        conf_probability_like = np.all((pred_conf >= 0.0) & (pred_conf <= 1.0))
+        if labels_integer_like and conf_probability_like:
+            return np.round(pred_labels).astype(int)
+
+    return np.argmax(preds_arr, axis=1).astype(int)
 
 
 # ── Build per-sample gesture label array ─────────────────────────────────────
@@ -131,8 +172,11 @@ def build_gesture_timeline_from_predictions(preds: np.ndarray, n_samples: int):
         gesture_labels: array of int, 0=open, 1=close
         phase_labels:   array of int (all set to 2='holding' for predicted windows)
     """
-    n_preds = preds.shape[0]
-    pred_classes = np.argmax(preds, axis=1)
+    pred_classes = extract_prediction_classes(preds)
+    n_preds = pred_classes.shape[0]
+    if n_preds == 0:
+        return np.full(n_samples, -1, dtype=int), np.zeros(n_samples, dtype=int)
+
     samples_per_pred = n_samples // n_preds
 
     gesture_labels = np.full(n_samples, -1, dtype=int)

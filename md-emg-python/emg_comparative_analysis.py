@@ -2877,13 +2877,14 @@ class EMGAnalyzer:
             # Combined duration + %MVC figure
             self._plot_mvc_duration_combined(duration_subject_df, mvc_subject_df, object_ids, condition_order)
             
-            # Create visualization
-            self._plot_mvc_by_object(df, condition_order)
+            # Create visualization from subject-level means so figure markers
+            # match the statistics report (which is also subject-level mean based).
+            self._plot_mvc_by_object(mvc_subject_df, condition_order)
         
         return df
     
     def _plot_mvc_by_object(self, df: pd.DataFrame, condition_order: List[str]):
-        """Plot %MVC comparison by object with box plots"""
+        """Plot %MVC comparison by object using subject-level means."""
         fig, axes = plt.subplots(1, 2, figsize=(18, 7))
         
         # Define colors for conditions
@@ -2924,8 +2925,8 @@ class EMGAnalyzer:
                               edgecolor='darkred', linewidth=1, zorder=10)
         
         ax.set_xlabel('Object', fontsize=13, fontweight='bold')
-        ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
-        ax.set_title('%MVC by Object and Condition (Box Plot)\n(★ = Mean, ◆ = Median)', fontsize=15, fontweight='bold')
+        ax.set_ylabel('%MVC (subject mean)', fontsize=13, fontweight='bold')
+        ax.set_title('%MVC by Object and Condition (Subject Means)\n(★ = Mean, ◆ = Median)', fontsize=15, fontweight='bold')
         ax.legend(fontsize=11, loc='upper right', title='Condition')
         ax.grid(True, alpha=0.3, axis='y')
         ax.set_ylim(bottom=0)
@@ -2950,8 +2951,8 @@ class EMGAnalyzer:
                 ax.scatter(i, median_val, marker='D', s=60, color='red',
                           edgecolor='darkred', linewidth=1, zorder=10)
         
-        ax.set_title('Overall %MVC by Condition', fontsize=15, fontweight='bold')
-        ax.set_ylabel('%MVC', fontsize=13, fontweight='bold')
+        ax.set_title('Overall %MVC by Condition (Subject Means)', fontsize=15, fontweight='bold')
+        ax.set_ylabel('%MVC (subject mean)', fontsize=13, fontweight='bold')
         ax.set_xlabel('Condition', fontsize=13, fontweight='bold')
         ax.grid(True, alpha=0.3, axis='y')
         ax.set_ylim(bottom=0)
