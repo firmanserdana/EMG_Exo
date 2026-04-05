@@ -206,18 +206,7 @@ results-analysis/**/*.csv
 # Ignore all .gitkeep files in any directory
 !**/.gitkeep
 
-# Ignore data files but allow templates
-*.csv
+# Ignore data files in specific directories but allow templates
+data/**/*.csv
 data/**/*.json
-!timestamps_template.json
-
-*.png
-
-*.svg
-
-*.md
-*.json
-
-*.md
-*.svg
-*.png
+!md-emg-python/timestamps_template.json

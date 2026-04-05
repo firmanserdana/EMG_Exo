@@ -24,7 +24,7 @@ def robust_cv_read(image_path: str) -> np.ndarray | None:
         print(f"Error reading file {image_path} with robust_cv_read: {e}")
         return None
 
-def preprocess_for_ocr(image: np.ndarray) -> np.ndarray:
+def preprocess_for_ocr(image: np.ndarray) -> np.ndarray | None:
     """
     Applies pre-processing steps: grayscale and binary threshold.
     """
@@ -38,8 +38,8 @@ def preprocess_for_ocr(image: np.ndarray) -> np.ndarray:
 
 def main():
     print("Initializing EasyOCR... (This may take a moment)")
-    # We are using CPU mode for max compatibility.
-    reader = easyocr.Reader(['en'], gpu=True)
+    # Using CPU mode for maximum compatibility across different hardware.
+    reader = easyocr.Reader(['en'], gpu=False)
     print("EasyOCR initialized.")
 
     print(f"Scanning '{INPUT_DIRECTORY}' for images...")

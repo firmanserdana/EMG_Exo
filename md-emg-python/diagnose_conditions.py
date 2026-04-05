@@ -46,8 +46,12 @@ for csv_file in csv_files:
 
     print(f"\nActual pattern:")
     print(f"  Active glove:  {active_mean:6.2f} (1.00x)")
-    print(f"  Passive glove: {passive_mean:6.2f} ({passive_mean/active_mean:.2f}x)")
-    print(f"  No glove:      {noglove_mean:6.2f} ({noglove_mean/active_mean:.2f}x)")
+    if active_mean > 1e-9:  # Guard against division by zero
+        print(f"  Passive glove: {passive_mean:6.2f} ({passive_mean/active_mean:.2f}x)")
+        print(f"  No glove:      {noglove_mean:6.2f} ({noglove_mean/active_mean:.2f}x)")
+    else:
+        print(f"  Passive glove: {passive_mean:6.2f} (ratio N/A - active mean too low)")
+        print(f"  No glove:      {noglove_mean:6.2f} (ratio N/A - active mean too low)")
 
     if active_mean < passive_mean and active_mean < noglove_mean:
         print("\n✓ Pattern MATCHES expectation")
@@ -106,11 +110,15 @@ for csv_file in csv_files:
     ax = axes[1, 1]
     ratios_data = []
     clip_val = 10.0  # cap ratios to limit visual spikes from very small denominators
-    for ch in range(32):
+
+    # Get actual channel list from data
+    channels = sorted(df['Channel'].dropna().unique())
+
+    for ch in channels:
         active_val = df[(df['Condition']=='Active glove') & (df['Channel']==ch)]['Mean_RMS'].values
         passive_val = df[(df['Condition']=='Passive glove') & (df['Channel']==ch)]['Mean_RMS'].values
         noglove_val = df[(df['Condition']=='No glove') & (df['Channel']==ch)]['Mean_RMS'].values
-        
+
         if len(noglove_val) > 0 and noglove_val[0] > 1e-9:
             ratios_data.append({
                 'Channel': ch,

@@ -786,25 +786,25 @@ class EMGAnalyzer:
         self._outlier_counter = 0
         self._rng = np.random.default_rng(1337)
 
-    def _normalize_segment(self, segment: np.ndarray, subject_id: Optional[str]) -> np.ndarray:
+    def normalize_segment(self, segment: np.ndarray, subject_id: Optional[str]) -> np.ndarray:
         """Apply MVC normalization but NO filtering. Returns data in %MVC units."""
 
         data = segment.astype(np.float64, copy=True)
-        
+
         # Clip extreme values before normalization (likely artifacts/saturation)
         # Values > 50000 are typically electrode saturation or disconnection
         data = np.clip(data, -50000, 50000)
-        
+
         # No bandpass filtering - raw data
         # No outlier attenuation - data preserved as-is
-        
+
         # Apply MVC normalization if available
         if subject_id and subject_id in self.mvc_dict:
             mvc_rms = self.mvc_dict[subject_id]
             # Normalize to %MVC (percentage of maximum voluntary contraction)
             # Each channel divided by its MVC value, then multiply by 100
             data = (data / mvc_rms[np.newaxis, :]) * 100.0
-        
+
         return data
 
     def _design_bandpass_filter(self, fs_hz: float) -> Optional[np.ndarray]:

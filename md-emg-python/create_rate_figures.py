@@ -6,7 +6,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
 from emg_comparative_analysis import load_real_data, EMGDataLoader, EMGAnalyzer
-from scipy import stats
 
 CONDITIONS = ['Passive glove', 'Active glove', 'No glove']
 CONDITION_COLORS = {
@@ -74,7 +73,7 @@ def create_rate_based_temporal_comparison():
             all_durations = []
             
             for record in records:
-                segment = analyzer._normalize_segment(record.samples, record.subject)
+                segment = analyzer.normalize_segment(record.samples, record.subject)
                 rms = analyzer.compute_rms(segment, window_ms=100)
                 mean_abs = np.abs(rms).mean(axis=1)  # Mean across channels
                 
@@ -161,7 +160,7 @@ def create_rate_based_temporal_comparison():
             rates = []
             
             for record in records:
-                segment = analyzer._normalize_segment(record.samples, record.subject)
+                segment = analyzer.normalize_segment(record.samples, record.subject)
                 rms = analyzer.compute_rms(segment, window_ms=100)
                 mean_abs = np.abs(rms).mean()  # Mean over time and channels
                 duration = record.end_time - record.start_time
