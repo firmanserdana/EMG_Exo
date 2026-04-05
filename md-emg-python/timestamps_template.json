@@ -1,0 +1,40 @@
+{
+  "description": "Template for timestamps.json file used in EMG comparative analysis",
+  "sampling_rate_hz": 1000,
+  "note": "Times are in seconds. Each gesture/object can have multiple trials.",
+  
+  "gesture_starts": {
+    "0": [1.5, 5.2, 8.9, 12.5],
+    "1": [2.1, 6.3, 9.5, 13.2],
+    "2": [3.0, 7.1, 10.2, 14.0],
+    "3": [3.8, 7.9, 11.0, 14.8],
+    "4": [4.5, 8.5, 11.8, 15.5],
+    "5": [5.2, 9.2, 12.5, 16.2]
+  },
+  
+  "gesture_ends": {
+    "0": [2.0, 5.7, 9.4, 13.0],
+    "1": [2.6, 6.8, 10.0, 13.7],
+    "2": [3.5, 7.6, 10.7, 14.5],
+    "3": [4.3, 8.4, 11.5, 15.3],
+    "4": [5.0, 9.0, 12.3, 16.0],
+    "5": [5.7, 9.7, 13.0, 16.7]
+  },
+  
+  "gesture_labels": {
+    "0": "Object/Gesture 0 (e.g., HandOpen)",
+    "1": "Object/Gesture 1 (e.g., Hook Grasp)",
+    "2": "Object/Gesture 2 (e.g., Lateral Grasp)",
+    "3": "Object/Gesture 3 (e.g., Index Pointing)",
+    "4": "Object/Gesture 4 (e.g., Thumb)",
+    "5": "Object/Gesture 5 (e.g., Middle Finger)"
+  },
+  
+  "usage_notes": {
+    "how_to_use": "Copy this template to your data directory and update the timestamps",
+    "key_format": "Gesture IDs must be strings ('0', '1', etc.)",
+    "time_format": "Times in seconds from start of recording",
+    "multiple_trials": "You can have any number of trials per gesture (must match in starts/ends)",
+    "example_location": "data/healthy/condition_name/timestamps.json"
+  }
+}

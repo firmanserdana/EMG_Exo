@@ -2,7 +2,9 @@
 # Configuration for ESP32-based pneumatic glove control system
 
 # Network settings
-ip_address: "192.168.50.11" # ESP32 IP address (Arlen hotspot)
+# IMPORTANT: Set the ESP32 IP address locally for your environment; do not commit a machine/network-specific IP here.
+# Recommended: override this value in a non-versioned local copy/override of this config before running.
+ip_address: "" # ESP32 IP address placeholder; set locally for your network
 port: 4210 # TCP port for communication
 timeout: 10 # Connection timeout in seconds (increased for stability)
 

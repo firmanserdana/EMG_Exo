@@ -13,9 +13,9 @@ public class TcpServerManager : MonoBehaviour
     private class RawTcpEvent
     {
         public string @event;
-        public int event_id;
+        public int event_id = -1;
         public string eventName;
-        public int eventID;
+        public int eventID = -1;
         public string fsmState;
         public bool isLocked;
         public float lockTime;
@@ -153,7 +153,7 @@ public class TcpServerManager : MonoBehaviour
             }
 
             string resolvedName = !string.IsNullOrEmpty(raw.eventName) ? raw.eventName : raw.@event;
-            int resolvedId = raw.eventID != 0 ? raw.eventID : raw.event_id;
+            int resolvedId = raw.eventID >= 0 ? raw.eventID : raw.event_id;
 
             if (resolvedName == "session_context")
             {

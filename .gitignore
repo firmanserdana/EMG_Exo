@@ -3,5 +3,8 @@ config.h
 .env
 .vscode/
 
+*.png
 *.PNG
+*.MP4
 *.mp4
+*.PNG

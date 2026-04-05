@@ -1,0 +1,750 @@
+{
+  "policy": "hybrid_mapped_then_fallback",
+  "entries": [
+    {
+      "subject": "S1",
+      "condition": "active_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "active_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "active_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "no_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "no_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "no_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "passive_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "passive_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S1",
+      "condition": "passive_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S1/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S1/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "active_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "active_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "fallback",
+      "session": 4,
+      "source": "fallback",
+      "npy_path": "data/healthy/S10/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "no_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "no_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "no_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "passive_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "passive_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S10",
+      "condition": "passive_glove",
+      "session": 10,
+      "source": "mapped",
+      "npy_path": "data/healthy/S10/emg_logs/session_10.npy",
+      "timestamps_path": "data/healthy/S10/emg_logs/session_10_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "active_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "active_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "active_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "no_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "no_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "no_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "passive_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "passive_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S2",
+      "condition": "passive_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S2/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S2/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "active_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "active_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "active_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "no_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "no_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "no_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "passive_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "passive_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S3",
+      "condition": "passive_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S3/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S3/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "active_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "active_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "active_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "no_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "no_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "no_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "passive_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "passive_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S4",
+      "condition": "passive_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S4/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S4/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "active_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "active_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "active_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "no_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "no_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "no_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "passive_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "passive_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S5",
+      "condition": "passive_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S5/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S5/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "active_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "active_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "active_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "no_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "no_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "no_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "passive_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "passive_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S6",
+      "condition": "passive_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S6/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S6/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "active_glove",
+      "session": 11,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_11.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_11_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "active_glove",
+      "session": 12,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_12.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_12_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "active_glove",
+      "session": 13,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_13.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_13_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "fallback",
+      "session": 1,
+      "source": "fallback",
+      "npy_path": "data/healthy/S7/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "fallback",
+      "session": 2,
+      "source": "fallback",
+      "npy_path": "data/healthy/S7/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "fallback",
+      "session": 3,
+      "source": "fallback",
+      "npy_path": "data/healthy/S7/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "fallback",
+      "session": 4,
+      "source": "fallback",
+      "npy_path": "data/healthy/S7/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "no_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "no_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "passive_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S7",
+      "condition": "passive_glove",
+      "session": 10,
+      "source": "mapped",
+      "npy_path": "data/healthy/S7/emg_logs/session_10.npy",
+      "timestamps_path": "data/healthy/S7/emg_logs/session_10_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "active_glove",
+      "session": 8,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_08.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_08_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "active_glove",
+      "session": 9,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_09.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_09_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "active_glove",
+      "session": 10,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_10.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_10_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "no_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_04_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "no_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "no_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "passive_glove",
+      "session": 1,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_01.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_01_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "passive_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S8",
+      "condition": "passive_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S8/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S8/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "active_glove",
+      "session": 10,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_10.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_10_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "active_glove",
+      "session": 13,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_13.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_13_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "no_glove",
+      "session": 5,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_05.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_05_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "no_glove",
+      "session": 6,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_06.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_06_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "no_glove",
+      "session": 7,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_07.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_07_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "passive_glove",
+      "session": 2,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_02.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_02_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "passive_glove",
+      "session": 3,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_03.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_03_timestamps.json"
+    },
+    {
+      "subject": "S9",
+      "condition": "passive_glove",
+      "session": 4,
+      "source": "mapped",
+      "npy_path": "data/healthy/S9/emg_logs/session_04.npy",
+      "timestamps_path": "data/healthy/S9/emg_logs/session_04_timestamps.json"
+    }
+  ],
+  "excluded": [],
+  "stats": {
+    "num_entries": 91,
+    "num_excluded": 0,
+    "subjects": {
+      "S1": 9,
+      "S10": 9,
+      "S2": 9,
+      "S3": 9,
+      "S4": 9,
+      "S5": 9,
+      "S6": 9,
+      "S7": 11,
+      "S8": 9,
+      "S9": 8
+    }
+  }
+}

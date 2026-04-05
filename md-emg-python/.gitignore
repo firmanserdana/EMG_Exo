@@ -200,13 +200,13 @@ results-optimization/**/*.json
 results-optimization/**/*.pth
 models-subjects/**/*.pth
 debug/**/*.csv
+results-analysis/**/*.png
+results-analysis/**/*.csv
 
 # Ignore all .gitkeep files in any directory
 !**/.gitkeep
 
-*.csv
-*.json
-
-*.md
-*.svg
-*.png
+# Ignore data files in specific directories but allow templates
+data/**/*.csv
+data/**/*.json
+!md-emg-python/timestamps_template.json
