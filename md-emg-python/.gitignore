@@ -203,6 +203,20 @@ debug/**/*.csv
 results-analysis/**/*.png
 results-analysis/**/*.csv
 
+# Generated analysis output directories (all file types)
+/results-analysis/
+/results-analysis_backup/
+/results-online/
+/results-optimization/
+/results-training/
+
+# Generated markdown reports in md-emg-python root
+/*.md
+!/README.md
+
+# Local root-level EMG data exports
+/emg_data_*.csv
+
 # Ignore all .gitkeep files in any directory
 !**/.gitkeep
 
