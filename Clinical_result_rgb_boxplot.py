@@ -37,6 +37,13 @@ RGB_GROUPS: list[tuple[tuple[int, int, int], tuple[int, ...]]] = [
 ]
 
 
+FONT_FAMILY = "DejaVu Sans"
+AXIS_GRID_COLOR = "#E6E6E6"
+AXIS_SPINE_COLOR = "#CFCFCF"
+TEXT_COLOR = "#222222"
+YELLOW_DOT_EDGE_COLOR = "#8A7800"
+
+
 def rgb_to_unit(rgb: tuple[int, int, int]) -> tuple[float, float, float]:
     return tuple(channel / 255 for channel in rgb)
 
@@ -50,102 +57,161 @@ def build_column_colors() -> dict[str, tuple[float, float, float]]:
     return colors
 
 
-def build_excel_like_stats(label: str, values: list[float]) -> dict[str, float | list[float] | str]:
-    array = np.sort(np.asarray(values, dtype=float))
-    q1 = float(np.percentile(array, 25, method="weibull"))
-    q3 = float(np.percentile(array, 75, method="weibull"))
-    median = float(np.median(array))
-    mean = float(np.mean(array))
-    return {
-        "label": label,
-        "whislo": float(array.min()),
-        "q1": q1,
-        "med": median,
-        "q3": q3,
-        "whishi": float(array.max()),
-        "mean": mean,
-        "fliers": [],
-    }
+def split_odd_even_columns(labels: list[str]) -> tuple[list[str], list[str]]:
+    odd = [label for label in labels if int(label.split()[1]) % 2 == 1]
+    even = [label for label in labels if int(label.split()[1]) % 2 == 0]
+    return odd, even
 
 
-def create_figure() -> plt.Figure:
-    labels = list(DATA_BY_COLUMN.keys())
-    colors = build_column_colors()
-    positions = np.arange(1, len(labels) + 1, dtype=float)
-    stats = [build_excel_like_stats(label, DATA_BY_COLUMN[label]) for label in labels]
-
+def apply_theme() -> None:
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
-            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+            "font.sans-serif": [FONT_FAMILY, "Arial", "Helvetica"],
             "axes.linewidth": 0.8,
-            "xtick.color": "#5F6368",
-            "ytick.color": "#5F6368",
+            "axes.labelcolor": TEXT_COLOR,
+            "xtick.color": "#555555",
+            "ytick.color": "#555555",
+            "axes.titlecolor": TEXT_COLOR,
         }
     )
 
-    fig, ax = plt.subplots(figsize=(7.4, 5.2), facecolor="white")
-    boxplot = ax.bxp(
-        stats,
-        positions=positions,
-        widths=0.6,
-        patch_artist=True,
-        showmeans=True,
-        meanprops={
-            "marker": "x",
-            "markerfacecolor": "none",
-            "markeredgecolor": "#303030",
-            "markeredgewidth": 0.8,
-            "markersize": 5.5,
-        },
-        medianprops={"color": "#202020", "linewidth": 0.8},
-        whiskerprops={"color": "#666666", "linewidth": 0.7},
-        capprops={"color": "#666666", "linewidth": 0.7},
-        flierprops={"marker": "", "markersize": 0},
-        showfliers=False,
-    )
 
-    for box_index, (patch, label) in enumerate(zip(boxplot["boxes"], labels, strict=True)):
-        color = colors[label]
-        patch.set_facecolor(color)
-        patch.set_edgecolor(color)
-        patch.set_alpha(1.0)
-        patch.set_linewidth(0.7)
-        boxplot["medians"][box_index].set_color("#333333")
-        boxplot["means"][box_index].set_markeredgecolor(color)
-        boxplot["means"][box_index].set_color(color)
-
-    ax.set_xlim(0, 18.5)
-    ax.set_ylim(-10, 12)
-    ax.set_yticks(np.arange(-10, 13, 2))
-    ax.set_xticks([])
-    ax.tick_params(axis="x", which="both", bottom=False, top=False, labelbottom=False)
-    ax.tick_params(axis="y", which="both", length=0, colors="#6F6F6F", labelsize=8)
-    ax.grid(axis="y", color="#D9D9D9", linewidth=0.8)
+def style_axis(ax: plt.Axes, ymin: float, ymax: float) -> None:
+    ax.set_ylim(ymin, ymax)
+    ax.grid(axis="y", color=AXIS_GRID_COLOR, linewidth=0.8)
+    ax.axhline(0.0, color="#A8A8A8", linewidth=0.9)
     ax.set_axisbelow(True)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_color("#D0D0D0")
-    ax.spines["bottom"].set_color("#D0D0D0")
+    ax.spines["left"].set_color(AXIS_SPINE_COLOR)
+    ax.spines["bottom"].set_color(AXIS_SPINE_COLOR)
     ax.spines["left"].set_linewidth(0.8)
     ax.spines["bottom"].set_linewidth(0.8)
+    ax.tick_params(axis="both", labelsize=8, length=0)
 
-    ax.margins(x=0)
-    fig.subplots_adjust(left=0.07, right=0.998, bottom=0.02, top=0.998)
+
+def values_for_label(label: str, positive_only: bool) -> np.ndarray:
+    values = np.asarray(DATA_BY_COLUMN[label], dtype=float)
+    if positive_only:
+        values = np.abs(values)
+    return values
+
+
+def dot_edge_color(label: str, default_color: tuple[float, float, float]) -> tuple[float, float, float] | str:
+    column_index = int(label.split()[1])
+    if column_index >= 9:
+        return YELLOW_DOT_EDGE_COLOR
+    return default_color
+
+
+def draw_bars(
+    ax: plt.Axes,
+    labels: list[str],
+    colors: dict[str, tuple[float, float, float]],
+    positive_only: bool,
+) -> None:
+    positions = np.arange(1, len(labels) + 1, dtype=float)
+    means = np.array([float(np.mean(values_for_label(label, positive_only))) for label in labels], dtype=float)
+    stds = np.array([float(np.std(values_for_label(label, positive_only), ddof=0)) for label in labels], dtype=float)
+
+    ax.bar(
+        positions,
+        means,
+        width=0.68,
+        color=[colors[label] for label in labels],
+        edgecolor=[colors[label] for label in labels],
+        linewidth=0.8,
+        alpha=0.9,
+        zorder=2,
+    )
+    ax.errorbar(positions, means, yerr=stds, fmt="none", ecolor="#4D4D4D", elinewidth=0.8, capsize=2.5, zorder=3)
+
+    for position, label in zip(positions, labels, strict=True):
+        values = values_for_label(label, positive_only)
+        jitter = np.linspace(-0.12, 0.12, num=len(values))
+        ax.scatter(
+            np.full_like(values, position) + jitter,
+            values,
+            s=18,
+            facecolors="white",
+            edgecolors=dot_edge_color(label, colors[label]),
+            linewidths=0.8,
+            zorder=4,
+        )
+
+    ax.set_xlim(0.35, len(labels) + 0.65)
+    ax.set_xticks([])
+    ax.tick_params(axis="x", which="both", bottom=False, top=False, labelbottom=False)
+
+
+def compute_ylims(labels: list[str], positive_only: bool) -> tuple[float, float]:
+    all_values = np.asarray(
+        [value for label in labels for value in values_for_label(label, positive_only)],
+        dtype=float,
+    )
+    if positive_only:
+        ymin = 0.0
+    else:
+        ymin = float(np.floor(all_values.min() - 1.0))
+    ymax = float(np.ceil(all_values.max() + 1.0))
+    return ymin, ymax
+
+
+def create_panel_figure(
+    labels: list[str],
+    positive_only: bool,
+) -> plt.Figure:
+    apply_theme()
+
+    colors = build_column_colors()
+    y_min, y_max = compute_ylims(labels, positive_only)
+
+    fig, ax = plt.subplots(figsize=(11.6, 4.0), facecolor="white")
+
+    style_axis(ax, y_min, y_max)
+    draw_bars(ax, labels, colors, positive_only)
+
+    fig.subplots_adjust(left=0.07, right=0.99, bottom=0.16, top=0.96)
     return fig
 
 
 def main() -> None:
-    fig = create_figure()
+    labels = list(DATA_BY_COLUMN.keys())
+    odd_labels, even_labels = split_odd_even_columns(labels)
+
+    blocks_fig = create_panel_figure(
+        labels=odd_labels,
+        positive_only=False,
+    )
+    drops_fig = create_panel_figure(
+        labels=even_labels,
+        positive_only=True,
+    )
+
     output_dir = Path(__file__).resolve().parent
-    stem = "clinical_result_rgb_boxplot"
-    png_path = output_dir / f"{stem}.png"
-    pdf_path = output_dir / f"{stem}.pdf"
-    svg_path = output_dir / f"{stem}.svg"
-    fig.savefig(png_path, dpi=600, bbox_inches="tight")
-    fig.savefig(pdf_path, dpi=600, bbox_inches="tight")
-    fig.savefig(svg_path, bbox_inches="tight")
-    print(f"Saved: {png_path.name}, {pdf_path.name}, and {svg_path.name}")
+
+    blocks_stem = "clinical_result_rgb_blocks_moved_barplot"
+    blocks_png = output_dir / f"{blocks_stem}.png"
+    blocks_pdf = output_dir / f"{blocks_stem}.pdf"
+    blocks_svg = output_dir / f"{blocks_stem}.svg"
+    blocks_fig.savefig(blocks_png, dpi=600, bbox_inches="tight")
+    blocks_fig.savefig(blocks_pdf, dpi=600, bbox_inches="tight")
+    blocks_fig.savefig(blocks_svg, bbox_inches="tight")
+
+    drops_stem = "clinical_result_rgb_drops_barplot"
+    drops_png = output_dir / f"{drops_stem}.png"
+    drops_pdf = output_dir / f"{drops_stem}.pdf"
+    drops_svg = output_dir / f"{drops_stem}.svg"
+    drops_fig.savefig(drops_png, dpi=600, bbox_inches="tight")
+    drops_fig.savefig(drops_pdf, dpi=600, bbox_inches="tight")
+    drops_fig.savefig(drops_svg, bbox_inches="tight")
+
+    print(
+        "Saved: "
+        f"{blocks_png.name}, {blocks_pdf.name}, {blocks_svg.name}, "
+        f"{drops_png.name}, {drops_pdf.name}, and {drops_svg.name}"
+    )
 
 
 if __name__ == "__main__":

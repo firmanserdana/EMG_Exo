@@ -43,6 +43,15 @@ GESTURE_NAMES = {0: 'Open', 1: 'Close', -1: 'Rest'}
 PHASE_NAMES = {0: 'Rest', 1: 'Grasping', 2: 'Holding', 3: 'Releasing'}
 # Phase encoding: 0=rest, 1=grasp_start->hold_start, 2=hold_start->hold_end, 3=hold_end->released
 
+# Video-verified BBT ground truth: (success, drop) per 1-min block.
+# Mapping: S1->S5 ses04 (skip cal), S2->S6 ses04 (skip short), S3->S7 ses07, S4->S8 ses01 (skip cal)
+BBT_VIDEO_GROUND_TRUTH = {
+    ('S5', 4): [(8, 0), (5, 5), (7, 0), (9, 0), (9, 0)],
+    ('S6', 4): [(4, 2), (0, 8), (5, 4), (8, 1), (4, 6)],
+    ('S7', 7): [(7, 1), (5, 4), (5, 4), (5, 3), (4, 0)],
+    ('S8', 1): [(7, 1), (8, 1), (9, 0), (8, 1), (7, 4)],
+}
+
 # Animation parameters
 RMS_WINDOW_MS = 200            # RMS window size in ms
 ACTIVE_FRAME_STEP_MS = 250     # Smaller step -> slower playback in active grasp phases
@@ -220,37 +229,159 @@ def build_gesture_timeline_from_predictions(preds, n_samples: int):
     return gesture_labels, phase_labels
 
 
-def compute_prediction_accuracy(pred_labels: np.ndarray, event_labels: np.ndarray):
-    """Compute prediction accuracy against events-derived labels.
+def build_trial_intervals(events):
+    """Parse events into trial intervals with the cued gesture.
 
-    Returns None if there is no overlap of valid labels.
+    Each trial runs from grasp_start_X to grasp_released (or trial_end).
+    Returns a list of dicts with keys 'gesture', 'start', 'end'.
     """
-    valid = np.isin(pred_labels, [0, 1]) & np.isin(event_labels, [0, 1])
-    n_valid = int(np.sum(valid))
-    if n_valid == 0:
+    trials = []
+    current_trial = None
+    for evt in events:
+        etype = evt.get('event_type', '')
+        ts = evt.get('timestamp')
+        if ts is None:
+            continue
+        if etype.startswith('grasp_start_'):
+            try:
+                gesture_id = int(etype.split('_')[-1])
+            except ValueError:
+                continue
+            current_trial = {'gesture': gesture_id, 'start': ts, 'end': None}
+        elif etype == 'grasp_released' and current_trial is not None:
+            current_trial['end'] = ts
+            trials.append(current_trial)
+            current_trial = None
+        elif etype == 'trial_end' and current_trial is not None:
+            current_trial['end'] = ts
+            trials.append(current_trial)
+            current_trial = None
+    return trials
+
+
+def parse_bbt_blocks(events, min_block_duration: float = 30.0):
+    """Parse events into BBT blocks (1-min attempts) with per-trial outcomes.
+
+    Each block runs from session_start to session_stop. Blocks shorter than
+    *min_block_duration* seconds are excluded (aborted attempts).
+
+    A trial is SUCCESS if the full close-hold-open sequence is present
+    (grasp_start_1 -> grasp_hold_start -> grasp_start_0 within a trial).
+    Otherwise it is a DROP.
+
+    Returns a list of block dicts with keys:
+      'start', 'end', 'duration', 'success', 'drop', 'trials'
+    """
+    starts = [e['timestamp'] for e in events if e['event_type'] == 'session_start']
+    stops = [e['timestamp'] for e in events if e['event_type'] == 'session_stop']
+    n_raw = min(len(starts), len(stops))
+
+    blocks = []
+    for b in range(n_raw):
+        b_start, b_end = starts[b], stops[b]
+        dur = b_end - b_start
+        if dur < min_block_duration:
+            continue
+
+        block_events = [e for e in events if b_start <= e['timestamp'] <= b_end]
+
+        trials = []
+        cur = None
+        for e in block_events:
+            et = e['event_type']
+            if et == 'trial_start':
+                cur = {'has_close': False, 'has_hold': False, 'has_open': False}
+            if cur is not None:
+                if et == 'grasp_start_1':
+                    cur['has_close'] = True
+                elif et == 'grasp_hold_start':
+                    cur['has_hold'] = True
+                elif et == 'grasp_start_0':
+                    cur['has_open'] = True
+                elif et == 'trial_end':
+                    trials.append(cur)
+                    cur = None
+
+        success = sum(1 for t in trials if t['has_close'] and t['has_hold'] and t['has_open'])
+        drop = len(trials) - success
+        blocks.append({
+            'start': b_start, 'end': b_end, 'duration': dur,
+            'success': success, 'drop': drop, 'trials': len(trials),
+        })
+
+    return blocks
+
+
+def select_bbt_blocks(blocks, n_expected: int = 5):
+    """Select the *n_expected* actual BBT blocks, skipping calibration.
+
+    If there are more blocks than expected, the first extra block is assumed
+    to be a calibration/practice block and is skipped.
+    """
+    if len(blocks) <= n_expected:
+        return blocks[:n_expected]
+    return blocks[len(blocks) - n_expected:]
+
+
+def compute_bbt_accuracy(events, subject: str, session_idx: int):
+    """Compute BBT decoding accuracy from events and video ground truth.
+
+    Uses video-verified success/drop counts (BBT_VIDEO_GROUND_TRUTH) as the
+    primary accuracy source.  Falls back to events-derived trial outcomes
+    when video data is not available.
+
+    Returns None if no blocks are found, otherwise a dict with:
+      - blocks: list of per-block {success, drop, total, accuracy}
+      - overall_success, overall_total, overall_accuracy
+      - source: 'video' or 'events'
+    """
+    all_blocks = parse_bbt_blocks(events)
+    if not all_blocks:
         return None
 
-    pred_valid = pred_labels[valid]
-    event_valid = event_labels[valid]
-    overall = float(np.mean(pred_valid == event_valid))
+    video_key = (subject, session_idx)
+    video_data = BBT_VIDEO_GROUND_TRUTH.get(video_key)
 
-    per_class = {}
-    for gid in [0, 1]:
-        class_mask = event_valid == gid
-        class_count = int(np.sum(class_mask))
-        class_acc = float(np.mean(pred_valid[class_mask] == gid)) if class_count > 0 else np.nan
-        per_class[gid] = {'count': class_count, 'accuracy': class_acc}
-
-    confusion = np.zeros((2, 2), dtype=int)
-    for gt in [0, 1]:
-        for pd in [0, 1]:
-            confusion[gt, pd] = int(np.sum((event_valid == gt) & (pred_valid == pd)))
+    if video_data is not None:
+        # Use video ground truth
+        n_blocks = len(video_data)
+        bbt_blocks = select_bbt_blocks(all_blocks, n_blocks)
+        block_results = []
+        for i, (v_success, v_drop) in enumerate(video_data):
+            total = v_success + v_drop
+            acc = v_success / total if total > 0 else 0.0
+            evt_block = bbt_blocks[i] if i < len(bbt_blocks) else None
+            block_results.append({
+                'success': v_success, 'drop': v_drop, 'total': total,
+                'accuracy': acc,
+                'events_success': evt_block['success'] if evt_block else None,
+                'events_drop': evt_block['drop'] if evt_block else None,
+            })
+        overall_s = sum(s for s, _ in video_data)
+        overall_total = sum(s + d for s, d in video_data)
+        source = 'video'
+    else:
+        # Fall back to events-derived accuracy
+        bbt_blocks = select_bbt_blocks(all_blocks, 5)
+        block_results = []
+        for b in bbt_blocks:
+            total = b['success'] + b['drop']
+            acc = b['success'] / total if total > 0 else 0.0
+            block_results.append({
+                'success': b['success'], 'drop': b['drop'], 'total': total,
+                'accuracy': acc,
+                'events_success': b['success'], 'events_drop': b['drop'],
+            })
+        overall_s = sum(b['success'] for b in block_results)
+        overall_total = sum(b['total'] for b in block_results)
+        source = 'events'
 
     return {
-        'n_valid': n_valid,
-        'overall': overall,
-        'per_class': per_class,
-        'confusion': confusion,
+        'blocks': block_results,
+        'overall_success': overall_s,
+        'overall_total': overall_total,
+        'overall_accuracy': overall_s / overall_total if overall_total > 0 else 0.0,
+        'source': source,
     }
 
 
@@ -371,23 +502,30 @@ def create_session_animation(subject: str, session_idx: int, data_dir: Path, out
     n_close = int(np.sum(gesture_labels == 1))
     print(f'    Label source: {label_source} - Open: {n_open} samples, Close: {n_close} samples')
 
-    pred_acc_info = None
-    if pred_labels is not None and event_labels is not None:
-        pred_acc_info = compute_prediction_accuracy(pred_labels, event_labels)
-        if pred_acc_info is None:
-            print('    Prediction accuracy: unavailable (no overlapping labeled samples).')
+    bbt_acc = None
+    if events is not None:
+        bbt_acc = compute_bbt_accuracy(events, subject, session_idx)
+        if bbt_acc is None:
+            print('    BBT decoding accuracy: unavailable (no BBT blocks found).')
         else:
-            conf = pred_acc_info['confusion']
+            src = bbt_acc['source']
+            overall = bbt_acc['overall_accuracy'] * 100
+            total_s = bbt_acc['overall_success']
+            total_n = bbt_acc['overall_total']
             print(
-                f"    Prediction accuracy vs events: {pred_acc_info['overall'] * 100:.2f}% "
-                f"(n={pred_acc_info['n_valid']} samples)"
+                f"    BBT decoding accuracy ({src}): "
+                f"{total_s}/{total_n} = {overall:.1f}%"
             )
-            print(
-                '      Confusion [gt rows: Open, Close | pred cols: Open, Close]: '
-                f'[[{conf[0, 0]}, {conf[0, 1]}], [{conf[1, 0]}, {conf[1, 1]}]]'
-            )
-    elif pred_labels is not None:
-        print('    Prediction accuracy: unavailable (events file missing).')
+            for i, blk in enumerate(bbt_acc['blocks']):
+                blk_acc = blk['accuracy'] * 100
+                evt_info = ''
+                if src == 'video' and blk['events_success'] is not None:
+                    evt_info = (f"  (events: {blk['events_success']}S "
+                                f"{blk['events_drop']}D)")
+                print(
+                    f"      Block {i + 1}: {blk['success']}S {blk['drop']}D "
+                    f"= {blk_acc:.0f}%{evt_info}"
+                )
 
     print('    Precomputing frames ...')
     frames = precompute_frames(emg, gesture_labels, phase_labels, timestamps)
