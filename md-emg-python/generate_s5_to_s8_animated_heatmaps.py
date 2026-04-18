@@ -12,10 +12,12 @@ Usage:
     python generate_s5_to_s8_animated_heatmaps.py
     python generate_s5_to_s8_animated_heatmaps.py S6
     python generate_s5_to_s8_animated_heatmaps.py S5,S7 1 4
+    python generate_s5_to_s8_animated_heatmaps.py --accuracy-only
 """
 
 import sys
 import pickle
+import csv
 from pathlib import Path
 
 import matplotlib
@@ -50,6 +52,25 @@ BBT_VIDEO_GROUND_TRUTH = {
     ('S6', 4): [(4, 2), (0, 8), (5, 4), (8, 1), (4, 6)],
     ('S7', 7): [(7, 1), (5, 4), (5, 4), (5, 3), (4, 0)],
     ('S8', 1): [(7, 1), (8, 1), (9, 0), (8, 1), (7, 4)],
+}
+
+# Healthy subject BBT results (5 subjects x 5 blocks), encoded as
+# [moved1, dropped1, moved2, dropped2, ...]. Dropped values are negative
+# in source notes and converted to absolute counts for accuracy.
+HEALTHY_BBT_ODD_EVEN_COUNTS = [
+    [9, -1, 6, -1, 9, -2, 10, -1, 10, 0],
+    [6, -2, 8, -1, 8, -2, 7, -2, 8, -2],
+    [7, -2, 8, 0, 8, 0, 7, 0, 6, -2],
+    [7, -2, 9, -1, 6, -2, 6, 0, 10, -2],
+    [6, -1, 10, 0, 7, -2, 10, 0, 10, 0],
+]
+
+BBT_BAR_COLORS = {
+    'S5': '#2d5e7f',
+    'S6': '#489bcf',
+    'S7': '#92348e',
+    'S8': '#da7842',
+    'Healthy': '#ffff54',  # same yellow family used in clinical_result_rgb_blocks_moved
 }
 
 # Animation parameters
@@ -385,6 +406,159 @@ def compute_bbt_accuracy(events, subject: str, session_idx: int):
     }
 
 
+def compute_healthy_bbt_aggregate():
+    """Compute one aggregate healthy-group BBT accuracy bar (mean +/- std).
+
+    Accuracy per healthy subject is computed from total moved / (moved + dropped)
+    across 5 blocks, then summarized as mean and population std across the 5
+    healthy subjects.
+    """
+    subject_acc_pct = []
+    total_success = 0
+    total_trials = 0
+
+    for row in HEALTHY_BBT_ODD_EVEN_COUNTS:
+        moved = [int(v) for v in row[0::2]]
+        dropped = [abs(int(v)) for v in row[1::2]]
+
+        success = sum(moved)
+        trials = success + sum(dropped)
+
+        total_success += success
+        total_trials += trials
+
+        acc = (100.0 * success / trials) if trials > 0 else 0.0
+        subject_acc_pct.append(acc)
+
+    subject_acc_pct = np.asarray(subject_acc_pct, dtype=float)
+    return {
+        'mean_pct': float(np.mean(subject_acc_pct)) if subject_acc_pct.size > 0 else 0.0,
+        'std_pct': float(np.std(subject_acc_pct, ddof=0)) if subject_acc_pct.size > 0 else 0.0,
+        'overall_success': int(total_success),
+        'overall_total': int(total_trials),
+        'overall_accuracy': (total_success / total_trials) if total_trials > 0 else 0.0,
+    }
+
+
+def save_bbt_accuracy_bar_with_healthy(subject_bbt: dict, output_root: Path):
+    """Save BBT accuracy bar plot with SCI subjects plus one healthy aggregate bar."""
+    subject_order = ['S5', 'S6', 'S7', 'S8']
+
+    labels = []
+    means_pct = []
+    stds_pct = []
+    colors = []
+
+    for subject in subject_order:
+        entry = subject_bbt.get(subject)
+        if entry is None:
+            continue
+
+        blocks = entry.get('blocks', [])
+        block_acc_pct = np.asarray([100.0 * float(b['accuracy']) for b in blocks], dtype=float)
+        if block_acc_pct.size == 0:
+            continue
+
+        labels.append(subject)
+        means_pct.append(float(np.mean(block_acc_pct)))
+        stds_pct.append(float(np.std(block_acc_pct, ddof=0)))
+        colors.append(BBT_BAR_COLORS.get(subject, '#888888'))
+
+    healthy = compute_healthy_bbt_aggregate()
+    labels.append('Healthy')
+    means_pct.append(healthy['mean_pct'])
+    stds_pct.append(healthy['std_pct'])
+    colors.append(BBT_BAR_COLORS['Healthy'])
+
+    if not labels:
+        return
+
+    x = np.arange(len(labels), dtype=float)
+    fig, ax = plt.subplots(1, 1, figsize=(3.1, 2.4))
+    fig.patch.set_facecolor('white')
+
+    ax.bar(
+        x,
+        means_pct,
+        color=colors,
+        alpha=0.75,
+        edgecolor='black',
+        linewidth=0.5,
+        width=0.55,
+        zorder=2,
+    )
+    ax.errorbar(
+        x,
+        means_pct,
+        yerr=stds_pct,
+        fmt='none',
+        ecolor='black',
+        elinewidth=0.7,
+        capsize=2.5,
+        capthick=0.7,
+        zorder=3,
+    )
+
+    ax.set_ylabel('Accuracy (%)', fontsize=7)
+    ax.set_ylim(0, 110)
+    ax.set_yticks([0, 25, 50, 75, 100])
+    ax.set_xticks([])
+    ax.tick_params(axis='x', which='both', bottom=False, top=False, labelbottom=False)
+    ax.tick_params(axis='y', labelsize=7, width=0.5)
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(0.5)
+    ax.spines['bottom'].set_linewidth(0.5)
+
+    fig.tight_layout()
+
+    png_path = output_root / 'bbt_accuracy_bar_std.png'
+    svg_path = output_root / 'bbt_accuracy_bar_std.svg'
+    fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    fig.savefig(svg_path, bbox_inches='tight')
+    plt.close(fig)
+
+    summary_path = output_root / 'bbt_accuracy_summary.csv'
+    with open(summary_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            'subject', 'session', 'total_success', 'total_drop',
+            'total_trials', 'overall_accuracy', 'source',
+        ])
+        for subject in subject_order:
+            entry = subject_bbt.get(subject)
+            if entry is None:
+                continue
+            total_success = int(entry['overall_success'])
+            total_trials = int(entry['overall_total'])
+            total_drop = total_trials - total_success
+            writer.writerow([
+                subject,
+                entry.get('session', ''),
+                total_success,
+                total_drop,
+                total_trials,
+                f"{float(entry['overall_accuracy']):.4f}",
+                entry.get('source', ''),
+            ])
+
+        writer.writerow([
+            'Healthy',
+            'all5',
+            healthy['overall_success'],
+            healthy['overall_total'] - healthy['overall_success'],
+            healthy['overall_total'],
+            f"{healthy['overall_accuracy']:.4f}",
+            'manual_odd_even',
+        ])
+
+    print(
+        f"Saved BBT accuracy bar (with healthy aggregate): {png_path.name}, {svg_path.name}, "
+        f"and updated {summary_path.name}"
+    )
+
+
 # RMS computation --------------------------------------------------------------
 
 def compute_windowed_rms(emg_data: np.ndarray, center_idx: int, half_window: int) -> np.ndarray:
@@ -455,7 +629,10 @@ PHASE_COLORS = {
 
 
 def create_session_animation(subject: str, session_idx: int, data_dir: Path, output_dir: Path):
-    """Build and save an animated heatmap for a single session."""
+    """Build and save an animated heatmap for a single session.
+
+    Returns computed BBT accuracy dict when available, otherwise None.
+    """
     npy_file = data_dir / f'session_{session_idx:02d}.npy'
     if not npy_file.exists():
         print(f'  Session {session_idx:02d}: npy file not found, skipping.')
@@ -650,6 +827,7 @@ def create_session_animation(subject: str, session_idx: int, data_dir: Path, out
         print(f'    Saved: {out_path}')
 
     plt.close(fig)
+    return bbt_acc
 
 
 # Main ------------------------------------------------------------------------
@@ -665,11 +843,16 @@ def normalize_subject(subject_token: str):
 
 
 def parse_args(argv):
-    """Parse CLI args into subjects and sessions."""
+    """Parse CLI args into subjects, sessions, and mode flags."""
     subjects = []
     sessions = []
+    accuracy_only = False
 
     for token in argv[1:]:
+        if token in ('--accuracy-only', '--no-video'):
+            accuracy_only = True
+            continue
+
         parts = [p for p in token.split(',') if p.strip()]
         for part in parts:
             subj = normalize_subject(part)
@@ -689,12 +872,33 @@ def parse_args(argv):
     # Preserve order but remove duplicates
     subjects = list(dict.fromkeys(subjects))
     sessions = sorted(set(sessions)) if sessions else None
-    return subjects, sessions
+    return subjects, sessions, accuracy_only
+
+
+def collect_session_bbt_accuracy(subject: str, session_idx: int, data_dir: Path):
+    """Collect BBT accuracy from events only, without rendering videos."""
+    events = load_events(data_dir, session_idx)
+    if events is None:
+        return None
+
+    bbt_acc = compute_bbt_accuracy(events, subject, session_idx)
+    if bbt_acc is None:
+        return None
+
+    src = bbt_acc['source']
+    overall = bbt_acc['overall_accuracy'] * 100
+    total_s = bbt_acc['overall_success']
+    total_n = bbt_acc['overall_total']
+    print(
+        f"  Session {session_idx:02d}: BBT decoding accuracy ({src}): "
+        f"{total_s}/{total_n} = {overall:.1f}%"
+    )
+    return bbt_acc
 
 
 def main():
     try:
-        subjects, sessions_filter = parse_args(sys.argv)
+        subjects, sessions_filter, accuracy_only = parse_args(sys.argv)
     except ValueError as exc:
         print(f'ERROR: {exc}')
         sys.exit(1)
@@ -704,6 +908,10 @@ def main():
         f'  Window: {RMS_WINDOW_MS}ms | '
         f'Active step: {ACTIVE_FRAME_STEP_MS}ms | Rest step: {REST_FRAME_STEP_MS}ms | FPS: {FPS}'
     )
+    if accuracy_only:
+        print('  Mode: accuracy-only (BBT bar plot only, no animations/videos)')
+
+    bbt_by_subject = {}
 
     for subject in subjects:
         data_dir = DATA_ROOT / subject / 'raw'
@@ -721,15 +929,31 @@ def main():
 
         print(f'\nSubject {subject}')
         print(f'  Sessions: {sessions}')
-        print(f'  Output: {output_dir}\n')
+        if not accuracy_only:
+            print(f'  Output: {output_dir}\n')
+        else:
+            print()
 
         if not sessions:
             print('  No sessions found, skipping.')
             continue
 
         for session_idx in sessions:
-            create_session_animation(subject, session_idx, data_dir, output_dir)
+            if accuracy_only:
+                bbt_acc = collect_session_bbt_accuracy(subject, session_idx, data_dir)
+            else:
+                bbt_acc = create_session_animation(subject, session_idx, data_dir, output_dir)
+            if bbt_acc is not None:
+                current = bbt_by_subject.get(subject)
+                if current is None or bbt_acc['overall_total'] > current['overall_total']:
+                    bbt_by_subject[subject] = {
+                        **bbt_acc,
+                        'session': session_idx,
+                    }
             print()
+
+    if bbt_by_subject:
+        save_bbt_accuracy_bar_with_healthy(bbt_by_subject, OUTPUT_ROOT)
 
     print('Done.')
 
